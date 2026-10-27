@@ -11,17 +11,48 @@ const char* computeShaderSource = R"(
     [numthreads(16, 16, 1)]
     void main(uint3 dispatchThreadID : SV_DispatchThreadID)
     {
+        float3 cameraPos = float3(0.0, 0.0, -3.0);
+        float3 rayOrigin = cameraPos;
+        float3 voxelMin = float3(-0.5, -0.5, -0.5);
+        float3 voxelMax = float3(0.5, 0.5, 0.5);
+
+        // Threads pixel
         uint width, height;
         outTexture.GetDimensions(width, height);
 
-        if (dispatchThreadID.x >= width || dispatchThreadID.y >= height)
+        uint2 pixel = dispatchThreadID.xy;
+        if (pixel.x >= width || pixel.y >= height)
             return;
+        
+        float2 screenSize = float2(width, height);
+        float2 uv = (float2(pixel) - screenSize * 0.5) / (screenSize * 0.5);
 
-        float r = (float)dispatchThreadID.x / (float)width;
-        float g = (float)dispatchThreadID.y / (float)height;
-        float b = 0.5f;
+        float fov = radians(60);
+        float fovScale = tan(fov * 0.5);
 
-        outTexture[dispatchThreadID.xy] = float4(r, g, b, 1.0f);
+        float aspect = (float)width / (float)height;
+
+        float3 rayDir = float3(uv.x * aspect * fovScale, -uv.y * fovScale, 1.0);
+        rayDir = normalize(rayDir);
+
+        float3 t0 = (voxelMin - rayOrigin) / rayDir;
+        float3 t1 = (voxelMax - rayOrigin) / rayDir;
+
+        float3 tNear = min(t0, t1);
+        float3 tFar = max(t0, t1);
+
+        float tEnter = max(max(tNear.x, tNear.y), tNear.z);
+        float tExit  = min(min(tFar.x, tFar.y), tFar.z);
+
+        // Pixel color
+        float4 pixelColor = float4(0.08, 0.10, 0.14, 1.0);
+
+        if (tEnter <= tExit && tExit >= 0.0) {
+            pixelColor = float4(1.0, 0.45, 0.12, 1.0);
+        }
+
+        // Write to texture
+        outTexture[pixel] = pixelColor;
     }
 )";
 
