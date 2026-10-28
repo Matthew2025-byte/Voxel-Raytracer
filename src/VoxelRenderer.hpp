@@ -3,7 +3,14 @@
 #include <SDL3_shadercross/SDL_shadercross.h>
 
 #include <tuple>
+struct CameraData {
+	float x;
+	float y;
+	float z;
+	float padding;
 
+	CameraData(float x, float y, float z) : x(x), y(y), z(z) {}
+};
 class VoxelRenderer {
    public:
 	bool Initialize(SDL_Window* window, uint32_t textureWidth, uint32_t textureHeight,
@@ -36,7 +43,7 @@ class VoxelRenderer {
 		}
 		return true;
 	}
-	void DrawFrame(SDL_Window* window) {
+	void DrawFrame(SDL_Window* window, CameraData camera) {
 		SDL_GPUCommandBuffer* commandBuffer = SDL_AcquireGPUCommandBuffer(device);
 		if (!commandBuffer) return;
 
@@ -49,6 +56,8 @@ class VoxelRenderer {
 		SDL_GPUComputePass* computePass = SDL_BeginGPUComputePass(commandBuffer, &rwBinding, 1, NULL, 0);
 		SDL_BindGPUComputePipeline(computePass, computePipeline);
 		SDL_BindGPUComputeStorageTextures(computePass, 0, &renderTexture, 1);
+
+		SDL_PushGPUComputeUniformData(commandBuffer, 0, &camera, sizeof(camera));
 
 		SDL_DispatchGPUCompute(computePass, (properties.textureWidth + 15) / 16, (properties.textureHeight + 15) / 16,
 							   1);

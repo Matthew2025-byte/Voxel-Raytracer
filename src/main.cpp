@@ -8,10 +8,14 @@
 const char* computeShaderSource = R"(
     RWTexture2D<float4> outTexture : register(u0, space1);
 
+    cbuffer CameraBuffer : register (b0, space2) {
+        float3 cameraPos;
+        float padding;
+    }
+
     [numthreads(16, 16, 1)]
     void main(uint3 dispatchThreadID : SV_DispatchThreadID)
     {
-        float3 cameraPos = float3(0.0, 0.0, -3.0);
         float3 rayOrigin = cameraPos;
         float3 voxelMin = float3(-0.5, -0.5, -0.5);
         float3 voxelMax = float3(0.5, 0.5, 0.5);
@@ -59,6 +63,8 @@ const char* computeShaderSource = R"(
 struct AppState {
 	SDL_Window* window;
 	VoxelRenderer renderer;
+
+	float camX, camY, camZ;
 };
 
 SDL_AppResult SDL_AppInit(void** appstate, int argc, char* argv[]) {
@@ -90,13 +96,25 @@ SDL_AppResult SDL_AppEvent(void* appstate, SDL_Event* event) {
 	if (event->type == SDL_EVENT_QUIT) {
 		return SDL_APP_SUCCESS;
 	}
+	if (event->type == SDL_EVENT_KEY_DOWN) {
+		if (event->key.scancode == SDL_SCANCODE_W) app.camZ += 0.1f;
+		if (event->key.scancode == SDL_SCANCODE_S) app.camZ -= 0.1f;
+
+		if (event->key.scancode == SDL_SCANCODE_A) app.camX -= 0.1f;
+		if (event->key.scancode == SDL_SCANCODE_D) app.camX += 0.1f;
+
+		if (event->key.scancode == SDL_SCANCODE_E) app.camY += 0.1f;
+		if (event->key.scancode == SDL_SCANCODE_Q) app.camY -= 0.1f;
+
+		SDL_Log("Camera position: (%f, %f, %f)", app.camX, app.camY, app.camZ);
+	}
 
 	return SDL_APP_CONTINUE;
 }
 SDL_AppResult SDL_AppIterate(void* appstate) {
 	AppState& app = *static_cast<AppState*>(appstate);
 
-	app.renderer.DrawFrame(app.window);
+	app.renderer.DrawFrame(app.window, CameraData(app.camX, app.camY, app.camZ));
 
 	return SDL_APP_CONTINUE;
 }
