@@ -5,6 +5,7 @@
 #include <tuple>
 
 #include "utils.hpp"
+
 struct CameraData {
 	Vector3 pos;
 	float pad1;
@@ -15,6 +16,7 @@ struct CameraData {
 	Vector3 up;
 	float pad4;
 
+	CameraData() : pos(0, 0, 0), forward(0, 0, 0), right(0, 0, 0), up(0, 0, 0) {}
 	CameraData(Vector3 pos) : pos(pos), forward(0, 0, 0), right(0, 0, 0), up(0, 0, 0) {}
 
 	void updateRotation(float yaw, float pitch) {
@@ -34,6 +36,23 @@ struct CameraData {
 
 		up = { forward.y * right.z - forward.z * right.y, forward.z * right.x - forward.x * right.z,
 			   forward.x * right.y - forward.y * right.x };
+	}
+};
+struct Camera {
+	CameraData gpuBuffer;
+	Vector3 pos;
+	float yaw, pitch;
+
+	Camera() : gpuBuffer(), pos(0, 0, 0), yaw(0), pitch(0) {}
+
+	void move(const Vector3& position) {
+		pos += position;
+		gpuBuffer.pos += position;
+	}
+	void move(const float& yaw, const float& pitch) {
+		this->yaw += yaw;
+		this->pitch += pitch;
+		gpuBuffer.updateRotation(yaw, pitch);
 	}
 };
 class VoxelRenderer {
