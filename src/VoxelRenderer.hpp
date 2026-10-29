@@ -3,43 +3,37 @@
 #include <SDL3_shadercross/SDL_shadercross.h>
 
 #include <tuple>
+
+#include "utils.hpp"
 struct CameraData {
-	float pos[3];
+	Vector3 pos;
 	float pad1;
-	float forward[3];
+	Vector3 forward;
 	float pad2;
-	float right[3];
+	Vector3 right;
 	float pad3;
-	float up[3];
+	Vector3 up;
 	float pad4;
 
-	CameraData(float x, float y, float z) : pos{ x, y, z }, forward{ 0, 0, 0 }, right{ 0, 0, 0 }, up(0, 0, 0) {}
+	CameraData(Vector3 pos) : pos(pos), forward(0, 0, 0), right(0, 0, 0), up(0, 0, 0) {}
 
 	void updateRotation(float yaw, float pitch) {
-		forward[0] = std::cos(pitch) * std::sin(yaw);
-		forward[1] = std::sin(pitch);
-		forward[2] = std::cos(pitch) * std::cos(yaw);
+		forward = { std::cos(pitch) * std::sin(yaw), std::sin(pitch), std::cos(pitch) * std::cos(yaw) };
 
-		float fLength = std::sqrtf(forward[0] * forward[0] + forward[1] * forward[1] + forward[2] * forward[2]);
+		float fLength = forward.sqrMagnitude();
 		if (fLength > 0) {
-			forward[0] /= fLength;
-			forward[1] /= fLength;
-			forward[2] /= fLength;
+			forward /= std::sqrtf(fLength);
 		}
 
-		right[0] = forward[2];
-		right[1] = 0.0;
-		right[2] = -forward[0];
+		right = { forward.z, 0.0, -forward.x };
 
-		float rLength = std::sqrtf(right[0] * right[0] + right[1] * right[1] + right[2] * right[2]);
+		float rLength = right.sqrMagnitude();
 		if (rLength > 0) {
-			right[0] /= rLength;
-			right[2] /= rLength;
+			right /= std::sqrtf(rLength);
 		}
 
-		up[0] = forward[1] * right[2] - forward[2] * right[1];
-		up[1] = forward[2] * right[0] - forward[0] * right[2];
-		up[2] = forward[0] * right[1] - forward[1] * right[0];
+		up = { forward.y * right.z - forward.z * right.y, forward.z * right.x - forward.x * right.z,
+			   forward.x * right.y - forward.y * right.x };
 	}
 };
 class VoxelRenderer {
@@ -82,7 +76,7 @@ class VoxelRenderer {
 		rwBinding.texture = renderTexture;
 		rwBinding.mip_level = 0;
 		rwBinding.layer = 0;
-		rwBinding.cycle = true;
+		rwBinding.cycle = false;
 
 		SDL_GPUComputePass* computePass = SDL_BeginGPUComputePass(commandBuffer, &rwBinding, 1, NULL, 0);
 		SDL_BindGPUComputePipeline(computePass, computePipeline);
@@ -96,7 +90,7 @@ class VoxelRenderer {
 
 		SDL_GPUTexture* swapchainTexture;
 		Uint32 windowW, windowH;
-		if (SDL_AcquireGPUSwapchainTexture(commandBuffer, window, &swapchainTexture, &windowW, &windowH)) {
+		if (SDL_WaitAndAcquireGPUSwapchainTexture(commandBuffer, window, &swapchainTexture, &windowW, &windowH)) {
 			if (swapchainTexture != NULL) {
 				SDL_GPUBlitInfo blitInfo = {};
 				blitInfo.source.texture = renderTexture;

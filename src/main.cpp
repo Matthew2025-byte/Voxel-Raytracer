@@ -6,6 +6,7 @@
 #include <unordered_map>
 
 #include "VoxelRenderer.hpp"
+#include "utils.hpp"
 
 const char* computeShaderSource = R"(
     RWTexture2D<float4> outTexture : register(u0, space1);
@@ -70,7 +71,7 @@ struct AppState {
 	VoxelRenderer renderer;
 
 	std::unordered_map<SDL_Scancode, bool> keys;
-	float camX, camY, camZ;
+	Vector3 cameraPos;
 	float camRX, camRY;
 
 	Uint64 lastTick;
@@ -133,40 +134,41 @@ SDL_AppResult SDL_AppIterate(void* appstate) {
 	AppState& app = *static_cast<AppState*>(appstate);
 	Uint64 currentTick = SDL_GetTicksNS();
 	float dt = float(currentTick - app.lastTick) / 1'000'000'000;
+	app.lastTick = currentTick;
 
-	CameraData camera(app.camX, app.camY, app.camZ);
+	CameraData camera(app.cameraPos);
 	camera.updateRotation(app.camRX, app.camRY);
-	float speed = 0.0001 * dt;
+	float speed = 10 * dt;
 
 	if (app.keys.contains(SDL_SCANCODE_W) && app.keys[SDL_SCANCODE_W]) {
-		app.camX += camera.forward[0] * speed;
-		app.camY += camera.forward[1] * speed;
-		app.camZ += camera.forward[2] * speed;
+		app.cameraPos.x += camera.forward.x * speed;
+		app.cameraPos.y += camera.forward.y * speed;
+		app.cameraPos.z += camera.forward.z * speed;
 	}
 	if (app.keys.contains(SDL_SCANCODE_S) && app.keys[SDL_SCANCODE_S]) {
-		app.camX -= camera.forward[0] * speed;
-		app.camY -= camera.forward[1] * speed;
-		app.camZ -= camera.forward[2] * speed;
+		app.cameraPos.x -= camera.forward.x * speed;
+		app.cameraPos.y -= camera.forward.y * speed;
+		app.cameraPos.z -= camera.forward.z * speed;
 	}
 	if (app.keys.contains(SDL_SCANCODE_A) && app.keys[SDL_SCANCODE_A]) {
-		app.camX -= camera.right[0] * speed;
-		app.camY -= camera.right[1] * speed;
-		app.camZ -= camera.right[2] * speed;
+		app.cameraPos.x -= camera.right.x * speed;
+		app.cameraPos.y -= camera.right.y * speed;
+		app.cameraPos.z -= camera.right.z * speed;
 	}
 	if (app.keys.contains(SDL_SCANCODE_D) && app.keys[SDL_SCANCODE_D]) {
-		app.camX += camera.right[0] * speed;
-		app.camY += camera.right[1] * speed;
-		app.camZ += camera.right[2] * speed;
+		app.cameraPos.x += camera.right.x * speed;
+		app.cameraPos.y += camera.right.y * speed;
+		app.cameraPos.z += camera.right.z * speed;
 	}
 	if (app.keys.contains(SDL_SCANCODE_E) && app.keys[SDL_SCANCODE_E]) {
-		app.camX += camera.up[0] * speed;
-		app.camY += camera.up[1] * speed;
-		app.camZ += camera.up[2] * speed;
+		app.cameraPos.x += camera.up.x * speed;
+		app.cameraPos.y += camera.up.y * speed;
+		app.cameraPos.z += camera.up.z * speed;
 	}
 	if (app.keys.contains(SDL_SCANCODE_Q) && app.keys[SDL_SCANCODE_Q]) {
-		app.camX -= camera.up[0] * speed;
-		app.camY -= camera.up[1] * speed;
-		app.camZ -= camera.up[2] * speed;
+		app.cameraPos.x -= camera.up.x * speed;
+		app.cameraPos.y -= camera.up.y * speed;
+		app.cameraPos.z -= camera.up.z * speed;
 	}
 
 	app.renderer.DrawFrame(app.window, camera);
