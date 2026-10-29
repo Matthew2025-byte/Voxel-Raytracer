@@ -3,6 +3,8 @@
 #include <SDL3/SDL_main.h>
 #include <SDL3_shadercross/SDL_shadercross.h>
 
+#include <unordered_map>
+
 #include "VoxelRenderer.hpp"
 
 const char* computeShaderSource = R"(
@@ -10,7 +12,9 @@ const char* computeShaderSource = R"(
 
     cbuffer CameraBuffer : register (b0, space2) {
         float3 cameraPos;
-        float padding;
+        float3 cameraForward;
+        float3 cameraRight;
+        float3 cameraUp;
     }
 
     [numthreads(16, 16, 1)]
@@ -29,15 +33,16 @@ const char* computeShaderSource = R"(
             return;
         
         float2 screenSize = float2(width, height);
-        float2 uv = (float2(pixel) - screenSize * 0.5) / (screenSize * 0.5);
+        float2 uv = (float2(pixel)) / screenSize * 2.0 - 1.0;
 
         float fov = radians(60);
         float fovScale = tan(fov * 0.5);
-
         float aspect = (float)width / (float)height;
 
-        float3 rayDir = float3(uv.x * aspect * fovScale, -uv.y * fovScale, 1.0);
-        rayDir = normalize(rayDir);
+        float screenX = uv.x * aspect * fovScale;
+        float screenY = -uv.y * fovScale;
+
+        float3 rayDir = normalize((screenX * cameraRight) + (screenY * cameraUp) + cameraForward);
 
         float3 t0 = (voxelMin - rayOrigin) / rayDir;
         float3 t1 = (voxelMax - rayOrigin) / rayDir;
@@ -64,7 +69,11 @@ struct AppState {
 	SDL_Window* window;
 	VoxelRenderer renderer;
 
+	std::unordered_map<SDL_Scancode, bool> keys;
 	float camX, camY, camZ;
+	float camRX, camRY;
+
+	Uint64 lastTick;
 };
 
 SDL_AppResult SDL_AppInit(void** appstate, int argc, char* argv[]) {
@@ -95,26 +104,72 @@ SDL_AppResult SDL_AppEvent(void* appstate, SDL_Event* event) {
 	AppState& app = *static_cast<AppState*>(appstate);
 	if (event->type == SDL_EVENT_QUIT) {
 		return SDL_APP_SUCCESS;
-	}
-	if (event->type == SDL_EVENT_KEY_DOWN) {
-		if (event->key.scancode == SDL_SCANCODE_W) app.camZ += 0.1f;
-		if (event->key.scancode == SDL_SCANCODE_S) app.camZ -= 0.1f;
+	} else if (event->type == SDL_EVENT_KEY_DOWN) {
+		if (event->key.scancode == SDL_SCANCODE_W) app.keys[SDL_SCANCODE_W] = true;
+		if (event->key.scancode == SDL_SCANCODE_S) app.keys[SDL_SCANCODE_S] = true;
 
-		if (event->key.scancode == SDL_SCANCODE_A) app.camX -= 0.1f;
-		if (event->key.scancode == SDL_SCANCODE_D) app.camX += 0.1f;
+		if (event->key.scancode == SDL_SCANCODE_A) app.keys[SDL_SCANCODE_A] = true;
+		if (event->key.scancode == SDL_SCANCODE_D) app.keys[SDL_SCANCODE_D] = true;
 
-		if (event->key.scancode == SDL_SCANCODE_E) app.camY += 0.1f;
-		if (event->key.scancode == SDL_SCANCODE_Q) app.camY -= 0.1f;
+		if (event->key.scancode == SDL_SCANCODE_E) app.keys[SDL_SCANCODE_E] = true;
+		if (event->key.scancode == SDL_SCANCODE_Q) app.keys[SDL_SCANCODE_Q] = true;
+	} else if (event->type == SDL_EVENT_KEY_UP) {
+		if (event->key.scancode == SDL_SCANCODE_W) app.keys[SDL_SCANCODE_W] = false;
+		if (event->key.scancode == SDL_SCANCODE_S) app.keys[SDL_SCANCODE_S] = false;
 
-		SDL_Log("Camera position: (%f, %f, %f)", app.camX, app.camY, app.camZ);
+		if (event->key.scancode == SDL_SCANCODE_A) app.keys[SDL_SCANCODE_A] = false;
+		if (event->key.scancode == SDL_SCANCODE_D) app.keys[SDL_SCANCODE_D] = false;
+
+		if (event->key.scancode == SDL_SCANCODE_E) app.keys[SDL_SCANCODE_E] = false;
+		if (event->key.scancode == SDL_SCANCODE_Q) app.keys[SDL_SCANCODE_Q] = false;
+	} else if (event->type == SDL_EVENT_MOUSE_MOTION) {
+		app.camRX += event->motion.xrel * 0.01;
+		app.camRY -= event->motion.yrel * 0.01;
 	}
 
 	return SDL_APP_CONTINUE;
 }
 SDL_AppResult SDL_AppIterate(void* appstate) {
 	AppState& app = *static_cast<AppState*>(appstate);
+	Uint64 currentTick = SDL_GetTicksNS();
+	float dt = float(currentTick - app.lastTick) / 1'000'000'000;
 
-	app.renderer.DrawFrame(app.window, CameraData(app.camX, app.camY, app.camZ));
+	CameraData camera(app.camX, app.camY, app.camZ);
+	camera.updateRotation(app.camRX, app.camRY);
+	float speed = 0.0001 * dt;
+
+	if (app.keys.contains(SDL_SCANCODE_W) && app.keys[SDL_SCANCODE_W]) {
+		app.camX += camera.forward[0] * speed;
+		app.camY += camera.forward[1] * speed;
+		app.camZ += camera.forward[2] * speed;
+	}
+	if (app.keys.contains(SDL_SCANCODE_S) && app.keys[SDL_SCANCODE_S]) {
+		app.camX -= camera.forward[0] * speed;
+		app.camY -= camera.forward[1] * speed;
+		app.camZ -= camera.forward[2] * speed;
+	}
+	if (app.keys.contains(SDL_SCANCODE_A) && app.keys[SDL_SCANCODE_A]) {
+		app.camX -= camera.right[0] * speed;
+		app.camY -= camera.right[1] * speed;
+		app.camZ -= camera.right[2] * speed;
+	}
+	if (app.keys.contains(SDL_SCANCODE_D) && app.keys[SDL_SCANCODE_D]) {
+		app.camX += camera.right[0] * speed;
+		app.camY += camera.right[1] * speed;
+		app.camZ += camera.right[2] * speed;
+	}
+	if (app.keys.contains(SDL_SCANCODE_E) && app.keys[SDL_SCANCODE_E]) {
+		app.camX += camera.up[0] * speed;
+		app.camY += camera.up[1] * speed;
+		app.camZ += camera.up[2] * speed;
+	}
+	if (app.keys.contains(SDL_SCANCODE_Q) && app.keys[SDL_SCANCODE_Q]) {
+		app.camX -= camera.up[0] * speed;
+		app.camY -= camera.up[1] * speed;
+		app.camZ -= camera.up[2] * speed;
+	}
+
+	app.renderer.DrawFrame(app.window, camera);
 
 	return SDL_APP_CONTINUE;
 }

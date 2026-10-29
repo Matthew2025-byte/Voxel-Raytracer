@@ -4,12 +4,43 @@
 
 #include <tuple>
 struct CameraData {
-	float x;
-	float y;
-	float z;
-	float padding;
+	float pos[3];
+	float pad1;
+	float forward[3];
+	float pad2;
+	float right[3];
+	float pad3;
+	float up[3];
+	float pad4;
 
-	CameraData(float x, float y, float z) : x(x), y(y), z(z) {}
+	CameraData(float x, float y, float z) : pos{ x, y, z }, forward{ 0, 0, 0 }, right{ 0, 0, 0 }, up(0, 0, 0) {}
+
+	void updateRotation(float yaw, float pitch) {
+		forward[0] = std::cos(pitch) * std::sin(yaw);
+		forward[1] = std::sin(pitch);
+		forward[2] = std::cos(pitch) * std::cos(yaw);
+
+		float fLength = std::sqrtf(forward[0] * forward[0] + forward[1] * forward[1] + forward[2] * forward[2]);
+		if (fLength > 0) {
+			forward[0] /= fLength;
+			forward[1] /= fLength;
+			forward[2] /= fLength;
+		}
+
+		right[0] = forward[2];
+		right[1] = 0.0;
+		right[2] = -forward[0];
+
+		float rLength = std::sqrtf(right[0] * right[0] + right[1] * right[1] + right[2] * right[2]);
+		if (rLength > 0) {
+			right[0] /= rLength;
+			right[2] /= rLength;
+		}
+
+		up[0] = forward[1] * right[2] - forward[2] * right[1];
+		up[1] = forward[2] * right[0] - forward[0] * right[2];
+		up[2] = forward[0] * right[1] - forward[1] * right[0];
+	}
 };
 class VoxelRenderer {
    public:
