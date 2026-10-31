@@ -2,6 +2,7 @@
 #include <SDL3/SDL.h>
 #include <SDL3_shadercross/SDL_shadercross.h>
 
+#include <string>
 #include <tuple>
 
 #include "utils.hpp"
@@ -57,8 +58,7 @@ struct Camera {
 };
 class VoxelRenderer {
    public:
-	bool Initialize(SDL_Window* window, uint32_t textureWidth, uint32_t textureHeight,
-					const char* computeShaderSource) {
+	bool Initialize(SDL_Window* window, uint32_t textureWidth, uint32_t textureHeight) {
 		this->properties.textureWidth = textureWidth;
 		this->properties.textureHeight = textureHeight;
 		SDL_GPUShaderFormat formats = SDL_ShaderCross_GetHLSLShaderFormats();
@@ -80,27 +80,24 @@ class VoxelRenderer {
 		};
 		renderTexture = SDL_CreateGPUTexture(device, &textureInfo);
 
-		computePipeline = generatePipeline(computeShaderSource);
+		computePipeline = generatePipeline();
 		if (!computePipeline) {
 			SDL_Log("Compute pipeline creation failed: %s", SDL_GetError());
 			return false;
 		}
 		return true;
 	}
-	void DrawFrame(SDL_Window* window, CameraData camera) {
+	void DrawFrame(SDL_Window* window, CameraData camera, SDL_GPUBuffer* octreeBuffer) {
 		SDL_GPUCommandBuffer* commandBuffer = SDL_AcquireGPUCommandBuffer(device);
 		if (!commandBuffer) return;
 
 		SDL_GPUStorageTextureReadWriteBinding rwBinding = {};
 		rwBinding.texture = renderTexture;
-		rwBinding.mip_level = 0;
-		rwBinding.layer = 0;
-		rwBinding.cycle = false;
 
 		SDL_GPUComputePass* computePass = SDL_BeginGPUComputePass(commandBuffer, &rwBinding, 1, NULL, 0);
 		SDL_BindGPUComputePipeline(computePass, computePipeline);
-		SDL_BindGPUComputeStorageTextures(computePass, 0, &renderTexture, 1);
 
+		SDL_BindGPUComputeStorageBuffers(computePass, 0, &octreeBuffer, 1);
 		SDL_PushGPUComputeUniformData(commandBuffer, 0, &camera, sizeof(camera));
 
 		SDL_DispatchGPUCompute(computePass, (properties.textureWidth + 15) / 16, (properties.textureHeight + 15) / 16,
@@ -140,9 +137,17 @@ class VoxelRenderer {
 		return std::tuple(bytecode, bytecodeSize);
 	}
 
-	SDL_GPUComputePipeline* generatePipeline(const char* computeShaderSource) {
+	SDL_GPUComputePipeline* generatePipeline() {
 		// create spirv bytecode for shadercross to transpile
-		auto [bytecode, bytecodeSize] = generateBytecodeFromHLSL(computeShaderSource);
+		size_t file_size;
+		void* file_data = SDL_LoadFile("renderer.comp.hlsl", &file_size);
+		if (!file_data) {
+			SDL_Log("Unable to load file: %s", SDL_GetError());
+			return nullptr;
+		}
+
+		auto [bytecode, bytecodeSize] = generateBytecodeFromHLSL((const char*)file_data);
+		SDL_free(file_data);
 		if (!bytecode) {
 			SDL_Log("Unable to generate bytecode: %s", SDL_GetError());
 			return nullptr;
@@ -178,6 +183,8 @@ class VoxelRenderer {
 		SDL_DestroyGPUDevice(device);
 	}
 	~VoxelRenderer() { Shutdown(); }
+
+	SDL_GPUDevice* getDevice() const { return device; }
 
    private:
 	struct RenderProperties {
