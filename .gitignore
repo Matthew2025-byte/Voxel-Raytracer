@@ -1,3 +1,5 @@
 build/
 
 CmakeUserPresets.json
+
+.vs/
