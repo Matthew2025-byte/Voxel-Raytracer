@@ -16,10 +16,10 @@ struct CameraData {
 	Vector3f right;
 	float pad3;
 	Vector3f up;
-	float pad4;
+	uint32_t debugMode;
 
-	CameraData() : pos(0, 0, 0), forward(0, 0, 1), right(1, 0, 0), up(0, 1, 0) {}
-	CameraData(Vector3f pos) : pos(pos), forward(0, 0, 1), right(1, 0, 0), up(0, 1, 0) {}
+	CameraData() : pos(0, 0, 0), forward(0, 0, 1), right(1, 0, 0), up(0, 1, 0), debugMode(0) {}
+	CameraData(Vector3f pos) : pos(pos), forward(0, 0, 1), right(1, 0, 0), up(0, 1, 0), debugMode(0) {}
 };
 static_assert(sizeof(CameraData) == 64, "CameraData must be 64 bytes");
 static_assert(offsetof(CameraData, forward) == 16, "forward must start at byte 16");

@@ -5,6 +5,7 @@ cbuffer CameraBuffer : register(b0, space2) {
     float3 cameraForward;
     float3 cameraRight;
     float3 cameraUp;
+    uint debugMode;
 }
 ByteAddressBuffer octreeBuffer : register(t0, space0);
 
@@ -49,6 +50,11 @@ float3 unpackVoxelColor(uint color) {
     return float3(color & 0xFF, (color >> 8) & 0xFF, (color >> 16) & 0xFF) / 255.0;
 }
 
+float3 heatmap(float t) {
+    t = saturate(t);
+    return float3(saturate(t * 2.0 - 1.0), 1.0 - abs(t * 2.0 - 1.0), saturate(1.0 - t * 2.0));
+}
+
 bool intersectAABB(float3 ro, float3 invDir, float3 bmin, float3 bmax, out float tEnter, out float tExit) {
     float3 t0 = (bmin - ro) * invDir;
     float3 t1 = (bmax - ro) * invDir;
@@ -63,7 +69,7 @@ bool intersectAABB(float3 ro, float3 invDir, float3 bmin, float3 bmax, out float
 }
     
 
-float3 castRay(Header header, float3 ro, float3 rd, out float hitT) {
+float3 castRay(Header header, float3 ro, float3 rd, out float hitT, out uint iterations) {
     Node n = loadNode(header.root_node);
     float3 invDir = 1 / rd;
     float childHalf = header.half_len * 0.5;
@@ -79,10 +85,12 @@ float3 castRay(Header header, float3 ro, float3 rd, out float hitT) {
     sp = 1;
 
     hitT = 1e30;
+    iterations = 0;
     float3 voxelColor = float3(0, 0, 0);
     
 
     while (sp > 0) {
+        iterations++;
         int cur = sp - 1;
         Node node = loadNode(stackNode[cur]);
         float3 center = stackCenter[cur];
@@ -159,7 +167,13 @@ void main(uint3 dispatchThreadID : SV_DispatchThreadID)
     float3 rayDir = normalize(screenX * cameraRight + screenY * cameraUp + cameraForward);
     // Pixel color
     float t;
+    uint iterations;
     //float4 pixelColor = float4(castRay(header, cameraPos, rayDir, t), 1);
-    float4 pixelColor = float4(castRay(header, cameraPos, rayDir, t), 1);
+    float3 color = castRay(header, cameraPos, rayDir, t, iterations);
+    if (debugMode == 1) {
+        color = heatmap(iterations/ 64.0);
+    }
+
+    float4 pixelColor = float4(color, 1.0);
     outTexture[pixel] = pixelColor;
 }

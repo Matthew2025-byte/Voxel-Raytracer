@@ -76,9 +76,9 @@ SDL_AppResult SDL_AppInit(void** appstate, int argc, char* argv[]) {
 	const float seed_x = 1234.56f;
 	const float seed_z = 7890.12f;
 
-	World world({ 1, 1, 1 });
-	for (int z = 0; z < Chunking::CHUNK_SIZE; ++z) {
-		for (int x = 0; x < Chunking::CHUNK_SIZE; ++x) {
+	World world({ 4, 1, 4 });
+	for (int z = 0; z < Chunking::CHUNK_SIZE * 4; ++z) {
+		for (int x = 0; x < Chunking::CHUNK_SIZE * 4; ++x) {
 			float nx = (static_cast<float>(x) + seed_x) * noise_scale;
 			float nz = (static_cast<float>(z) + seed_z) * noise_scale;
 
@@ -98,6 +98,13 @@ SDL_AppResult SDL_AppInit(void** appstate, int argc, char* argv[]) {
 	}
 	// Upload octree to gpu
 	app.voxelRenderer.submitOctree(world.buildOctree());
+
+	/*
+	 * ============ DEBUG MODE ============
+	 * Set 0 for normal rendering
+	 * Set 1 for iteration heatmap
+	 */
+	app.camera.gpuData.debugMode = 0;
 	return SDL_APP_CONTINUE;
 }
 
@@ -146,6 +153,7 @@ SDL_AppResult SDL_AppIterate(void* appstate) {
 	ImGui::Begin("Debug Info", nullptr, ImGuiWindowFlags_AlwaysAutoResize);
 	ImGui::Text("Frame time: %.3f ms", dt * 1000.0f);
 	ImGui::Text("FPS: %.2f", 1.0f / dt);
+	ImGui::Text("Render mode: %s", app.camera.gpuData.debugMode == 0 ? "Normal" : "Debug");
 	ImGui::End();
 
 	if (app.keys.contains(SDL_SCANCODE_W) && app.keys[SDL_SCANCODE_W]) {
@@ -210,6 +218,11 @@ void SDL_AppQuit(void* appstate, SDL_AppResult result) {
 		return;
 	}
 	AppState& app = *static_cast<AppState*>(appstate);
+
+	SDL_WaitForGPUIdle(app.voxelRenderer.getDevice());
+	ImGui_ImplSDL3_Shutdown();
+	ImGui_ImplSDLGPU3_Shutdown();
+	ImGui::DestroyContext();
 
 	if (app.window) SDL_DestroyWindow(app.window);
 
