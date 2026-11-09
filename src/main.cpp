@@ -18,14 +18,23 @@
 struct AppState {
 	SDL_Window* window;
 	VoxelRenderer voxelRenderer;
+	Uint64 lastTick;
 
 	std::unordered_map<SDL_Scancode, bool> keys;
 	Camera camera;
 
-	Uint64 lastTick;
+	bool pause = false;
 
 	AppState() : lastTick(SDL_GetTicksNS()), camera({ 0, 0, -6 }, 0, 0) {}
 };
+
+void processKey(AppState& app, SDL_Scancode scancode, bool down) {
+	app.keys[scancode] = down;
+	if (scancode == SDL_SCANCODE_ESCAPE && down) {
+		app.pause = !app.pause;
+		SDL_SetWindowRelativeMouseMode(app.window, !app.pause);
+	}
+}
 
 SDL_AppResult SDL_AppInit(void** appstate, int argc, char* argv[]) {
 	*appstate = new AppState();
@@ -113,25 +122,9 @@ SDL_AppResult SDL_AppEvent(void* appstate, SDL_Event* event) {
 	ImGui_ImplSDL3_ProcessEvent(event);
 	if (event->type == SDL_EVENT_QUIT) {
 		return SDL_APP_SUCCESS;
-	} else if (event->type == SDL_EVENT_KEY_DOWN) {
-		if (event->key.scancode == SDL_SCANCODE_W) app.keys[SDL_SCANCODE_W] = true;
-		if (event->key.scancode == SDL_SCANCODE_S) app.keys[SDL_SCANCODE_S] = true;
-
-		if (event->key.scancode == SDL_SCANCODE_A) app.keys[SDL_SCANCODE_A] = true;
-		if (event->key.scancode == SDL_SCANCODE_D) app.keys[SDL_SCANCODE_D] = true;
-
-		if (event->key.scancode == SDL_SCANCODE_E) app.keys[SDL_SCANCODE_E] = true;
-		if (event->key.scancode == SDL_SCANCODE_Q) app.keys[SDL_SCANCODE_Q] = true;
-	} else if (event->type == SDL_EVENT_KEY_UP) {
-		if (event->key.scancode == SDL_SCANCODE_W) app.keys[SDL_SCANCODE_W] = false;
-		if (event->key.scancode == SDL_SCANCODE_S) app.keys[SDL_SCANCODE_S] = false;
-
-		if (event->key.scancode == SDL_SCANCODE_A) app.keys[SDL_SCANCODE_A] = false;
-		if (event->key.scancode == SDL_SCANCODE_D) app.keys[SDL_SCANCODE_D] = false;
-
-		if (event->key.scancode == SDL_SCANCODE_E) app.keys[SDL_SCANCODE_E] = false;
-		if (event->key.scancode == SDL_SCANCODE_Q) app.keys[SDL_SCANCODE_Q] = false;
-	} else if (event->type == SDL_EVENT_MOUSE_MOTION) {
+	} else if ((event->type == SDL_EVENT_KEY_DOWN || event->type == SDL_EVENT_KEY_UP) && !event->key.repeat) {
+		processKey(app, event->key.scancode, event->type == SDL_EVENT_KEY_DOWN);
+	} else if (event->type == SDL_EVENT_MOUSE_MOTION && !app.pause) {
 		app.camera.rotate(event->motion.xrel * 0.001, -event->motion.yrel * 0.001);
 	}
 
@@ -154,25 +147,28 @@ SDL_AppResult SDL_AppIterate(void* appstate) {
 	ImGui::Text("Frame time: %.3f ms", dt * 1000.0f);
 	ImGui::Text("FPS: %.2f", 1.0f / dt);
 	ImGui::Text("Render mode: %s", app.camera.gpuData.debugMode == 0 ? "Normal" : "Debug");
+	ImGui::Text("Paused: %s", app.pause ? "Yes" : "No");
 	ImGui::End();
 
-	if (app.keys.contains(SDL_SCANCODE_W) && app.keys[SDL_SCANCODE_W]) {
-		app.camera.move({ app.camera.gpuData.forward * speed });
-	}
-	if (app.keys.contains(SDL_SCANCODE_S) && app.keys[SDL_SCANCODE_S]) {
-		app.camera.move({ app.camera.gpuData.forward * -speed });
-	}
-	if (app.keys.contains(SDL_SCANCODE_A) && app.keys[SDL_SCANCODE_A]) {
-		app.camera.move({ app.camera.gpuData.right * -speed });
-	}
-	if (app.keys.contains(SDL_SCANCODE_D) && app.keys[SDL_SCANCODE_D]) {
-		app.camera.move({ app.camera.gpuData.right * speed });
-	}
-	if (app.keys.contains(SDL_SCANCODE_E) && app.keys[SDL_SCANCODE_E]) {
-		app.camera.move({ app.camera.gpuData.up * speed });
-	}
-	if (app.keys.contains(SDL_SCANCODE_Q) && app.keys[SDL_SCANCODE_Q]) {
-		app.camera.move({ app.camera.gpuData.up * -speed });
+	if (!app.pause) {
+		if (app.keys.contains(SDL_SCANCODE_W) && app.keys[SDL_SCANCODE_W]) {
+			app.camera.move({ app.camera.gpuData.forward * speed });
+		}
+		if (app.keys.contains(SDL_SCANCODE_S) && app.keys[SDL_SCANCODE_S]) {
+			app.camera.move({ app.camera.gpuData.forward * -speed });
+		}
+		if (app.keys.contains(SDL_SCANCODE_A) && app.keys[SDL_SCANCODE_A]) {
+			app.camera.move({ app.camera.gpuData.right * -speed });
+		}
+		if (app.keys.contains(SDL_SCANCODE_D) && app.keys[SDL_SCANCODE_D]) {
+			app.camera.move({ app.camera.gpuData.right * speed });
+		}
+		if (app.keys.contains(SDL_SCANCODE_E) && app.keys[SDL_SCANCODE_E]) {
+			app.camera.move({ app.camera.gpuData.up * speed });
+		}
+		if (app.keys.contains(SDL_SCANCODE_Q) && app.keys[SDL_SCANCODE_Q]) {
+			app.camera.move({ app.camera.gpuData.up * -speed });
+		}
 	}
 
 	ImGui::Render();
