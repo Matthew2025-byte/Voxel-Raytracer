@@ -15,6 +15,8 @@
 #include "VoxelRenderer.hpp"
 #include "utils.hpp"
 
+constexpr const char* debug_modes[] = { "Normal", "Iteration Heatmap" };
+
 struct AppState {
 	SDL_Window* window;
 	VoxelRenderer voxelRenderer;
@@ -22,6 +24,7 @@ struct AppState {
 
 	std::unordered_map<SDL_Scancode, bool> keys;
 	Camera camera;
+	float cameraSpeed = 10.0f;
 
 	bool pause = false;
 
@@ -137,37 +140,43 @@ SDL_AppResult SDL_AppIterate(void* appstate) {
 	float dt = float(currentTick - app.lastTick) / 1'000'000'000;
 	app.lastTick = currentTick;
 
-	float speed = 10 * dt;
-
 	ImGui_ImplSDLGPU3_NewFrame();
 	ImGui_ImplSDL3_NewFrame();
 	ImGui::NewFrame();
 
+	int currentRenderMode = app.camera.gpuData.debugMode;
+
 	ImGui::Begin("Debug Info", nullptr, ImGuiWindowFlags_AlwaysAutoResize);
 	ImGui::Text("Frame time: %.3f ms", dt * 1000.0f);
 	ImGui::Text("FPS: %.2f", 1.0f / dt);
-	ImGui::Text("Render mode: %s", app.camera.gpuData.debugMode == 0 ? "Normal" : "Debug");
+	if (ImGui::Combo("Render Mode", &currentRenderMode, debug_modes, std::size(debug_modes))) {
+		app.camera.gpuData.debugMode = currentRenderMode;
+	}
 	ImGui::Text("Paused: %s", app.pause ? "Yes" : "No");
+
+	ImGui::Spacing();
+	ImGui::SliderFloat("Camera speed", &app.cameraSpeed, 1.0f, 100.0f);
+
 	ImGui::End();
 
 	if (!app.pause) {
 		if (app.keys.contains(SDL_SCANCODE_W) && app.keys[SDL_SCANCODE_W]) {
-			app.camera.move({ app.camera.gpuData.forward * speed });
+			app.camera.move({ app.camera.gpuData.forward * app.cameraSpeed * dt });
 		}
 		if (app.keys.contains(SDL_SCANCODE_S) && app.keys[SDL_SCANCODE_S]) {
-			app.camera.move({ app.camera.gpuData.forward * -speed });
+			app.camera.move({ app.camera.gpuData.forward * -app.cameraSpeed * dt });
 		}
 		if (app.keys.contains(SDL_SCANCODE_A) && app.keys[SDL_SCANCODE_A]) {
-			app.camera.move({ app.camera.gpuData.right * -speed });
+			app.camera.move({ app.camera.gpuData.right * -app.cameraSpeed * dt });
 		}
 		if (app.keys.contains(SDL_SCANCODE_D) && app.keys[SDL_SCANCODE_D]) {
-			app.camera.move({ app.camera.gpuData.right * speed });
+			app.camera.move({ app.camera.gpuData.right * app.cameraSpeed * dt });
 		}
 		if (app.keys.contains(SDL_SCANCODE_E) && app.keys[SDL_SCANCODE_E]) {
-			app.camera.move({ app.camera.gpuData.up * speed });
+			app.camera.move({ app.camera.gpuData.up * app.cameraSpeed * dt });
 		}
 		if (app.keys.contains(SDL_SCANCODE_Q) && app.keys[SDL_SCANCODE_Q]) {
-			app.camera.move({ app.camera.gpuData.up * -speed });
+			app.camera.move({ app.camera.gpuData.up * -app.cameraSpeed * dt });
 		}
 	}
 
