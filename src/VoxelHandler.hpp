@@ -106,10 +106,6 @@ struct Octree {
 }  // namespace OctreeHandler
 
 class World {
-	static constexpr int WORLD_DEPTH = 8;
-	static constexpr int WORLD_CHUNKS = 1 << (WORLD_DEPTH - Chunking::CHUNK_DEPTH);
-	static constexpr int BIAS = WORLD_CHUNKS / 2;
-
    public:
 	World(Vector3<int> worldSize) { Initialize(worldSize); }
 	Chunking::Voxel getVoxel(Vector3<int> pos) const {
@@ -138,105 +134,134 @@ class World {
 		}
 	}
 
-	Vector3<uint32_t> biasedChunkCoord(const Chunking::Chunk& c) {
-		Vector3<int> p = c.getPosition();
-		return { (uint32_t)(p.x + BIAS), (uint32_t)(p.y + BIAS), (uint32_t)(p.z + BIAS) };
-	}
-	struct Entry {
-		uint64_t key;
-		uint32_t color;
-	};
-	struct LevelEntry {
-		uint64_t key = 0;
+	struct V {
 		uint32_t color = 0;
-		uint32_t firstChild = 0;
-		uint8_t childMask = 0;
-		uint8_t leafMask = 0;
+		bool operator==(const V& other) const { return color == other.color; }
 	};
-	void buildChunk(const Chunking::Chunk& chunk, std::vector<Entry>& out) {
-		const uint64_t chunkBits = morton(biasedChunkCoord(chunk)) << (3 * Chunking::CHUNK_DEPTH);
-		const uint32_t total = Chunking::CHUNK_SIZE * Chunking::CHUNK_SIZE * Chunking::CHUNK_SIZE;
 
-		for (uint32_t m = 0; m < total; ++m) {
-			Vector3<uint32_t> p = decode(m);
-			Chunking::Voxel v = chunk.getVoxel({ (int)p.x, (int)p.y, (int)p.z });
-			if (v.color == Chunking::NULL_VOXEL.color) continue;
+	struct Node {
+		bool isLeaf = false;
+		union {
+			Node* children[8];
+			V voxel;
+		};
+		Node() : isLeaf(false) {}
+		void compress() {
+			if (isLeaf) return;
+			// Run recursive compression on children
+			// if child is a leaf, log type
+			for (int i = 0; i < 8; i++) {
+				Node* child = children[i];
+				child->compress();
+				if (!child->isLeaf) return;
+			}
+			// Check if all children are leaves with the same voxel
+			// If not, stop compression
+			V refVox = children[0]->voxel;
+			for (int i = 1; i < 8; i++) {
+				if (children[i]->voxel != refVox) return;
+			}
 
-			out.push_back({ chunkBits | m, v.color });
-		}
-	}
-	std::vector<Entry> buildWorld() {
-		std::vector<const Chunking::Chunk*> order;
-		order.reserve(chunks.size());
-
-		for (const auto& [coord, chunk] : chunks) order.push_back(&chunk);
-		std::sort(order.begin(), order.end(), [&](const Chunking::Chunk* a, const Chunking::Chunk* b) {
-			return morton(biasedChunkCoord(*a)) < morton(biasedChunkCoord(*b));
-		});
-
-		std::vector<Entry> out;
-		for (const Chunking::Chunk* c : order) buildChunk(*c, out);
-
-		return out;
-	}
-	std::vector<OctreeHandler::Node> buildNodes(const std::vector<Entry>& entries, int worldDepth) {
-		using OctreeHandler::Node;
-		std::vector<Node> nodes;
-		if (entries.empty()) return nodes;
-
-		std::vector<std::vector<LevelEntry>> levels(worldDepth + 1);
-
-		levels[worldDepth].reserve(entries.size());
-		for (const auto& e : entries) {
-			LevelEntry le;
-			le.key = e.key;
-			le.color = e.color;
-			levels[worldDepth].push_back(le);
+			// Delete children and compress node
+			for (auto child : children) {
+				delete child;
+			}
+			voxel = refVox;
+			isLeaf = true;
 		}
 
-		for (int l = worldDepth; l >= 1; --l) {
-			const auto& below = levels[l];
-			auto& above = levels[l - 1];
+		~Node() {
+			if (isLeaf) return;
+			for (Node* child : children) delete child;
+		}
+	};
+	std::unique_ptr<Node> buildChunk(const Chunking::Chunk& chunk) {
+		using Level = std::unordered_map<Vector3<int>, Node*>;
+		std::vector<Level> levels(Chunking::CHUNK_DEPTH + 1);
 
-			size_t i = 0;
-			while (i < below.size()) {
-				LevelEntry parent;
-				parent.key = below[i].key >> 3;
-				parent.firstChild = (uint32_t)i;
-
-				while (i < below.size() && below[i].key >> 3 == parent.key) {
-					uint8_t oct = below[i].key & 7;
-					parent.childMask |= 1u << oct;
-					if (l == worldDepth) parent.leafMask |= 1u << oct;
-					++i;
+		// Build leaf nodes
+		for (int z = 0; z < Chunking::CHUNK_SIZE; ++z) {
+			for (int y = 0; y < Chunking::CHUNK_SIZE; ++y) {
+				for (int x = 0; x < Chunking::CHUNK_SIZE; ++x) {
+					auto node = new Node();
+					node->isLeaf = true;
+					node->voxel.color = chunk.getVoxel(Vector3<int>(x, y, z)).color;
+					levels[Chunking::CHUNK_DEPTH].emplace(Vector3<int>(x, y, z), node);
 				}
-				above.push_back(parent);
 			}
 		}
-		SDL_assert(levels[0].size() == 1);
 
-		std::vector<uint32_t> base(worldDepth + 2, 0);
-		for (int l = 0; l <= worldDepth; ++l) base[l + 1] = base[l] + (uint32_t)levels[l].size();
-		nodes.reserve(base[worldDepth + 1]);
+		// Build parent nodes
+		int currentLevel = Chunking::CHUNK_DEPTH - 1;
+		int half = 1;
+		while (currentLevel >= 0) {
+			for (int z = 0; z < Chunking::CHUNK_SIZE; z += half * 2) {
+				for (int y = 0; y < Chunking::CHUNK_SIZE; y += half * 2) {
+					for (int x = 0; x < Chunking::CHUNK_SIZE; x += half * 2) {
+						auto node = new Node();
+						for (int oct = 0; oct < 8; oct++) {
+							int childX = x + (oct & 1) * half;
+							int childY = y + ((oct >> 1) & 1) * half;
+							int childZ = z + ((oct >> 2) & 1) * half;
 
-		for (int l = 0; l <= worldDepth; ++l) {
-			for (const LevelEntry& e : levels[l]) {
-				if (l == worldDepth)
-					nodes.push_back(Node::makeVoxel(e.color));
-				else
-					nodes.push_back(Node::makeNode(base[l + 1] + e.firstChild, e.childMask, e.leafMask));
+							auto it = levels[currentLevel + 1].find(Vector3<int>(childX, childY, childZ));
+							assert(it != levels[currentLevel + 1].end());
+							node->children[oct] = it->second;
+						}
+						levels[currentLevel].emplace(Vector3<int>(x, y, z), node);
+					}
+				}
+			}
+			half *= 2;
+			currentLevel--;
+		}
+		auto root = std::unique_ptr<Node>(levels[0].at(Vector3<int>(0, 0, 0)));
+		root->compress();
+		return root;
+	}
+	std::unique_ptr<Node> buildWorld() {
+		using Level = std::unordered_map<Vector3<int>, Node*>;
+
+		Vector3<int> minChunkPos = chunks.begin()->first;
+		Vector3<int> maxChunkPos = maxChunkPos;
+		for (const auto& [chunkPos, chunk] : chunks) {
+			minChunkPos.x = std::min(minChunkPos.x, chunkPos.x);
+			minChunkPos.y = std::min(minChunkPos.y, chunkPos.y);
+			minChunkPos.z = std::min(minChunkPos.z, chunkPos.z);
+			maxChunkPos.x = std::max(maxChunkPos.x, chunkPos.x);
+			maxChunkPos.y = std::max(maxChunkPos.y, chunkPos.y);
+			maxChunkPos.z = std::max(maxChunkPos.z, chunkPos.z);
+		}
+		Vector3<int> delta = maxChunkPos - minChunkPos;
+		int maxLen = std::max(delta.x, std::max(delta.y, delta.z));
+		int maxLevels = 0;
+		while ((1 << maxLevels) < maxLen) maxLevels++;
+
+		std::vector<Level> levels(maxLevels + 1);
+
+		for (const auto& [p, c] : chunks) {
+			Node* n = buildChunk(c).release();
+			if (n) levels[maxLevels].emplace(p - minChunkPos, n);
+		}
+
+		for (int level = maxLevels - 1; level >= 0; level--) {
+			for (const auto& [k, child] : levels[level + 1]) {
+				Vector3<int> pk(k.x >> 1, k.y >> 1, k.z >> 1);
+				uint32_t oct = (k.x & 1) | ((k.y & 1) << 1) | ((k.z & 1) << 2);
+
+				auto [it, inserted] = levels[level].try_emplace(pk, nullptr);
+				if (inserted) it->second = new Node();
+				it->second->children[oct] = child;
 			}
 		}
-		return nodes;
+		auto root = std::unique_ptr<Node>(levels[0].at(Vector3<int>(0, 0, 0)));
+		root->compress();
+		return root;
 	}
 
-	OctreeHandler::Octree buildOctree() {
+	OctreeHandler::Octree buildOctree(std::unique_ptr<Node> root) {
 		OctreeHandler::Octree octree;
-		octree.header.half_len = (1 << WORLD_DEPTH) / 2;
-		octree.header.center = { 0, 0, 0 };
-		octree.header.root_node = 0;
-		octree.nodes = buildNodes(buildWorld(), WORLD_DEPTH);
-		SDL_Log("Built octree with %zu nodes", octree.nodes.size());
+
 		return octree;
 	}
 

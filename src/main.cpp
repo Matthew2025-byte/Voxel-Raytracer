@@ -85,10 +85,11 @@ SDL_AppResult SDL_AppInit(void** appstate, int argc, char* argv[]) {
 			float noise_val = stb_perlin_fbm_noise3(nx, nz, 0.0f, lacunarity, gain, octaves);
 			float height_percent = (noise_val + 1.0f) * 0.5f;
 			int max_terrain_height = static_cast<int>(height_percent * Chunking::CHUNK_SIZE);
-			uint32_t grey_intensity = static_cast<uint32_t>(height_percent * 255.0f);
-			uint32_t grey = (grey_intensity << 16) | (grey_intensity << 8) | grey_intensity;
 
 			for (int y = 0; y < Chunking::CHUNK_SIZE; ++y) {
+				uint32_t grey_intensity = static_cast<uint32_t>(y / static_cast<float>(Chunking::CHUNK_SIZE) * 255.0f);
+				uint32_t grey = (grey_intensity << 16) | (grey_intensity << 8) | grey_intensity;
+
 				if (y > max_terrain_height)
 					world.setVoxel({ x, y, z }, Chunking::NULL_VOXEL);
 				else
