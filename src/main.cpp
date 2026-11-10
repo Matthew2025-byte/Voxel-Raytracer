@@ -88,9 +88,10 @@ SDL_AppResult SDL_AppInit(void** appstate, int argc, char* argv[]) {
 	const float seed_x = 1234.56f;
 	const float seed_z = 7890.12f;
 
-	World world({ 4, 1, 4 });
-	for (int z = 0; z < Chunking::CHUNK_SIZE * 4; ++z) {
-		for (int x = 0; x < Chunking::CHUNK_SIZE * 4; ++x) {
+	int world_size = 10;
+	World world({ world_size, 1, world_size });
+	for (int z = 0; z < Chunking::CHUNK_SIZE * world_size; ++z) {
+		for (int x = 0; x < Chunking::CHUNK_SIZE * world_size; ++x) {
 			float nx = (static_cast<float>(x) + seed_x) * noise_scale;
 			float nz = (static_cast<float>(z) + seed_z) * noise_scale;
 

@@ -191,20 +191,22 @@ class World {
 		}
 	};
 	std::unique_ptr<Node> buildChunk(const Chunking::Chunk& chunk) {
-		using Level = std::unordered_map<Vector3<int>, Node*>;
+		const int chunkSize = Chunking::CHUNK_SIZE;
+		using Level = std::vector<Node*>;
 		std::vector<Level> levels(Chunking::CHUNK_DEPTH + 1);
 
 		// Build leaf nodes
-		for (int z = 0; z < Chunking::CHUNK_SIZE; ++z) {
-			for (int y = 0; y < Chunking::CHUNK_SIZE; ++y) {
-				for (int x = 0; x < Chunking::CHUNK_SIZE; ++x) {
+		levels[Chunking::CHUNK_DEPTH].resize(std::pow(chunkSize, 3));
+		for (int z = 0; z < chunkSize; ++z) {
+			for (int y = 0; y < chunkSize; ++y) {
+				for (int x = 0; x < chunkSize; ++x) {
 					Chunking::Voxel voxel = chunk.getVoxel(Vector3<int>(x, y, z));
 					if (voxel == Chunking::NULL_VOXEL) continue;
 
 					auto node = new Node();
 					node->isLeaf = true;
 					node->voxel.color = voxel.color;
-					levels[Chunking::CHUNK_DEPTH].emplace(Vector3<int>(x, y, z), node);
+					levels[Chunking::CHUNK_DEPTH][x + y * chunkSize + z * chunkSize * chunkSize] = node;
 				}
 			}
 		}
@@ -213,9 +215,10 @@ class World {
 		int currentLevel = Chunking::CHUNK_DEPTH - 1;
 		int half = 1;
 		while (currentLevel >= 0) {
-			for (int z = 0; z < Chunking::CHUNK_SIZE; z += half * 2) {
-				for (int y = 0; y < Chunking::CHUNK_SIZE; y += half * 2) {
-					for (int x = 0; x < Chunking::CHUNK_SIZE; x += half * 2) {
+			levels[currentLevel].resize(std::pow(chunkSize, 3));
+			for (int z = 0; z < chunkSize; z += half * 2) {
+				for (int y = 0; y < chunkSize; y += half * 2) {
+					for (int x = 0; x < chunkSize; x += half * 2) {
 						auto node = new Node();
 						bool hasChildren = false;
 						for (int oct = 0; oct < 8; oct++) {
@@ -223,25 +226,25 @@ class World {
 							int childY = y + ((oct >> 1) & 1) * half;
 							int childZ = z + ((oct >> 2) & 1) * half;
 
-							auto it = levels[currentLevel + 1].find({ childX, childY, childZ });
-							if (it == levels[currentLevel + 1].end()) continue;	 // air
-							node->children[oct] = it->second;
+							auto it =
+								levels[currentLevel + 1][childX + childY * chunkSize + childZ * chunkSize * chunkSize];
+							if (it == nullptr) continue;  // air
+							node->children[oct] = it;
 							hasChildren = true;
 						}
 						if (!hasChildren) {
 							delete node;
 							continue;
 						}
-						levels[currentLevel].emplace(Vector3<int>(x, y, z), node);
+						levels[currentLevel][x + y * chunkSize + z * chunkSize * chunkSize] = node;
 					}
 				}
 			}
 			half *= 2;
 			currentLevel--;
 		}
-		auto it = levels[0].find({ 0, 0, 0 });
-		if (it == levels[0].end()) return nullptr;
-		auto root = std::unique_ptr<Node>(it->second);
+		if (levels[0][0] == nullptr) return nullptr;
+		auto root = std::unique_ptr<Node>(levels[0][0]);
 		if (root->compress()) return nullptr;
 		return root;
 	}

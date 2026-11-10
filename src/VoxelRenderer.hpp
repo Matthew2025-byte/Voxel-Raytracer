@@ -98,7 +98,7 @@ class VoxelRenderer {
 		SDL_GPUBufferCreateInfo octreeInfo = { 0 };
 		octreeInfo.usage = SDL_GPU_BUFFERUSAGE_COMPUTE_STORAGE_READ;
 		octreeInfo.size = sizeof(OctreeHandler::OctreeHeader) + array_size;	 // Add the size of the metadata
-		octreeBuffer = SDL_CreateGPUBuffer(device, &octreeInfo);
+		if (octreeBuffer == nullptr) octreeBuffer = SDL_CreateGPUBuffer(device, &octreeInfo);
 
 		// Create transfer buffer
 		SDL_GPUTransferBufferCreateInfo transferInfo = { .usage = SDL_GPU_TRANSFERBUFFERUSAGE_UPLOAD,
@@ -200,7 +200,7 @@ class VoxelRenderer {
 
    private:
 	SDL_GPUDevice* device;
-	SDL_GPUBuffer* octreeBuffer;
+	SDL_GPUBuffer* octreeBuffer = nullptr;
 	SDL_GPUComputePipeline* computePipeline;
 	SDL_GPUTexture* renderTexture;
 

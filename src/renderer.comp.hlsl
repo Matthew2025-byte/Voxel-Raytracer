@@ -70,68 +70,78 @@ bool intersectAABB(float3 ro, float3 invDir, float3 bmin, float3 bmax, out float
     
 
 float3 castRay(Header header, float3 ro, float3 rd, out float hitT, out uint iterations) {
-    Node n = loadNode(header.root_node);
-    float3 invDir = 1 / rd;
-    float childHalf = header.half_len * 0.5;
+    hitT = 1e30;
+    iterations = 0;
+
+    float3 safeRD = rd + float3(abs(rd) < 1e-8) * 1e-8;
+    float3 invDir = 1 / safeRD;
+
+    uint octMask = (rd.x < 0 ? 1u : 0u) | (rd.y < 0 ? 2u : 0u) | (rd.z < 0 ? 4u : 0u);
+    float3 rootCenter = float3(header.center);
+    float rootHalf = (float)header.half_len;
+
+    float tr0, tr1;
+    if (!intersectAABB(ro, invDir, rootCenter - rootHalf, rootCenter + rootHalf, tr0, tr1))
+        return float3(0, 0, 0);
 
     uint stackNode[STACK_SIZE];
     float3 stackCenter[STACK_SIZE];
-    float stackHalf[STACK_SIZE];
-    int sp;
+    uint stackI[STACK_SIZE];
+    int sp = 0;
 
-    stackNode[0] = header.root_node;
-    stackCenter[0] = header.center;
-    stackHalf[0] = header.half_len;
-    sp = 1;
-
-    hitT = 1e30;
-    iterations = 0;
-    float3 voxelColor = float3(0, 0, 0);
+    uint curIdx = header.root_node;
+    Node node = loadNode(curIdx);
+    float3 center = rootCenter;
+    float halfLen = rootHalf;
+    uint i = 0;
     
 
-    while (sp > 0) {
-        iterations++;
-        int cur = sp - 1;
-        Node node = loadNode(stackNode[cur]);
-        float3 center = stackCenter[cur];
-        float half_len = stackHalf[cur];
-
-        int w = sp;
-
-        float child_half = half_len * 0.5;
-        for (uint oct = 0; oct < 8; oct++) {
-            if (((node.getChildMask() >> oct) & 1u) == 0) continue;
-            
-            float3 offset = float3(oct & 1, (oct >> 1) & 1, (oct >> 2) & 1) * 2.0 - 1.0;
-            float3 cc = center + offset * child_half;
-
-            float t0, t1;
-            if (!intersectAABB(ro, invDir, cc - child_half, cc + child_half, t0, t1) || t0 >= hitT) continue;
-
-            if ((node.getLeafMask() >> oct) & 1u) {
-                Voxel v = loadVoxel(childIndex(node, oct));
-                voxelColor = unpackVoxelColor(v.color);
-                hitT = t0;
-            }
-            else if (sp < STACK_SIZE) {
-                stackNode[w] = childIndex(node, oct);
-                stackCenter[w] = cc;
-                stackHalf[w] = child_half;
-                w++;
-            }
+    while (true) {
+        if (i >= 8) {
+            if (sp == 0) break;
+            sp--;
+            curIdx= stackNode[sp];
+            node = loadNode(curIdx);
+            center = stackCenter[sp];
+            i = stackI[sp];
+            halfLen *= 2.0;
+            iterations++;
+            continue;
         }
-        if (w > sp) {
-            stackNode[cur] = stackNode[w - 1];
-            stackCenter[cur] = stackCenter[w - 1];
-            stackHalf[cur] = stackHalf[w - 1];
-            sp = w - 1;
+        
+        uint oct = i ^ octMask;
+        i++;
+
+        if (((node.getChildMask() >> oct) & 1u) == 0) continue;
+        float childHalf = halfLen * 0.5;
+        float3 offset = float3(oct & 1, (oct >> 1) & 1, (oct >> 2) & 1) * 2.0 - 1.0;
+        float3 cc = center + offset * childHalf;
+
+        float t0, t1;
+        if (!intersectAABB(ro, invDir, cc - childHalf, cc + childHalf, t0, t1)) continue;
+
+        uint next = childIndex(node, oct);
+
+        if ((node.getLeafMask() >> oct) & 1u) {
+            hitT = max(t0, 0.0);
+            return unpackVoxelColor(loadVoxel(next).color);
         }
-        else {
-            sp = cur;
+
+        if (sp < STACK_SIZE) {
+            stackNode[sp] = curIdx;
+            stackCenter[sp] = center;
+            stackI[sp] = i;
+            sp++;
+            curIdx = next;
+            node = loadNode(curIdx);
+            center = cc;
+            halfLen = childHalf;
+            i = 0;
+            iterations++;
         }
     }
     
-    return voxelColor;
+    return float3(0, 0, 0);
 }
 
 [numthreads(16, 16, 1)]
@@ -154,7 +164,7 @@ void main(uint3 dispatchThreadID : SV_DispatchThreadID)
         return;
         
     float2 screenSize = float2(width, height);
-    float2 uv = (float2(pixel)) / screenSize * 2.0 - 1.0;
+    float2 uv = (float2(pixel) + 0.5) / screenSize * 2.0 - 1.0;
 
     float fov = radians(60);
     float fovScale = tan(fov * 0.5);
