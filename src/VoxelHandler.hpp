@@ -200,7 +200,6 @@ class World {
 
 		bool operator==(const V&) const = default;
 	};
-
 	struct Node {
 		bool isLeaf = false;
 		union {
@@ -249,22 +248,14 @@ class World {
 			for (Node* child : children) delete child;
 		}
 	};
-	std::unique_ptr<Node> buildChunk(Chunking::Chunk& chunk) {
-		if (auto* v = chunk.isUniform()) {
-			if (*v == Chunking::NULL_VOXEL) return nullptr;
-			auto leaf = new Node();
-			leaf->isLeaf = true;
-			leaf->voxel.color = v->color;
-			return std::unique_ptr<Node>(leaf);
-		}
 
-		const int chunkSize = Chunking::CHUNK_SIZE;
+	std::unique_ptr<Node> buildChunk(Chunking::Chunk& chunk) {
+		constexpr int chunkSize = Chunking::CHUNK_SIZE;
 		using Level = std::vector<Node*>;
 		std::vector<Level> levels(Chunking::CHUNK_DEPTH + 1);
 
 		// Build leaf nodes
 		levels[Chunking::CHUNK_DEPTH].resize(std::pow(chunkSize, 3));
-		chunk.ensureRaw();
 		for (int z = 0; z < chunkSize; ++z) {
 			for (int y = 0; y < chunkSize; ++y) {
 				for (int x = 0; x < chunkSize; ++x) {
@@ -283,19 +274,21 @@ class World {
 		int currentLevel = Chunking::CHUNK_DEPTH - 1;
 		int half = 1;
 		while (currentLevel >= 0) {
-			levels[currentLevel].resize(std::pow(chunkSize, 3));
-			for (int z = 0; z < chunkSize; z += half * 2) {
-				for (int y = 0; y < chunkSize; y += half * 2) {
-					for (int x = 0; x < chunkSize; x += half * 2) {
+			int currentSize = 1 << currentLevel;
+			levels[currentLevel].resize(currentSize * currentSize * currentSize);
+
+			int childSize = 1 << (currentLevel + 1);
+			for (int z = 0; z < currentSize; ++z) {
+				for (int y = 0; y < currentSize; ++y) {
+					for (int x = 0; x < currentSize; ++x) {
 						auto node = new Node();
 						bool hasChildren = false;
 						for (int oct = 0; oct < 8; oct++) {
-							int childX = x + (oct & 1) * half;
-							int childY = y + ((oct >> 1) & 1) * half;
-							int childZ = z + ((oct >> 2) & 1) * half;
+							int cx = (x * 2) + (oct & 1);
+							int cy = (y * 2) + ((oct >> 1) & 1);
+							int cz = (z * 2) + ((oct >> 2) & 1);
+							auto it = levels[currentLevel + 1][cx + cy * childSize + cz * childSize * childSize];
 
-							auto it =
-								levels[currentLevel + 1][childX + childY * chunkSize + childZ * chunkSize * chunkSize];
 							if (it == nullptr) continue;  // air
 							node->children[oct] = it;
 							hasChildren = true;
@@ -304,11 +297,11 @@ class World {
 							delete node;
 							continue;
 						}
-						levels[currentLevel][x + y * chunkSize + z * chunkSize * chunkSize] = node;
+						size_t parentIdx = x + y * currentSize + z * currentSize * currentSize;
+						levels[currentLevel][parentIdx] = node;
 					}
 				}
 			}
-			half *= 2;
 			currentLevel--;
 		}
 		if (levels[0][0] == nullptr) return nullptr;
@@ -337,7 +330,17 @@ class World {
 		std::vector<Level> levels(maxLevels + 1);
 
 		for (auto& [p, c] : chunks) {
-			Node* n = buildChunk(c).release();
+			Node* n = nullptr;
+			if (auto* v = c.isUniform()) {
+				if (*v == Chunking::NULL_VOXEL) continue;
+				n = new Node();
+				n->isLeaf = true;
+				n->voxel.color = v->color;
+			} else {
+				c.ensureRaw();
+				n = buildChunk(c).release();
+			}
+
 			if (n) levels[maxLevels].emplace(p - minChunkPos, n);
 		}
 
