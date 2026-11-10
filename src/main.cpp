@@ -28,7 +28,7 @@ struct AppState {
 
 	bool pause = false;
 
-	AppState() : lastTick(SDL_GetTicksNS()), camera({ 0, 0, -6 }, 0, 0) {}
+	AppState() : lastTick(SDL_GetTicksNS()), camera({ 0, 0, 0 }, 0, 0) {}
 };
 
 void processKey(AppState& app, SDL_Scancode scancode, bool down) {
@@ -66,6 +66,10 @@ SDL_AppResult SDL_AppInit(void** appstate, int argc, char* argv[]) {
 	if (!app.voxelRenderer.Initialize(app.window, pixelW, pixelH)) {
 		return SDL_APP_FAILURE;
 	}
+	if (SDL_WindowSupportsGPUPresentMode(app.voxelRenderer.getDevice(), app.window, SDL_GPU_PRESENTMODE_IMMEDIATE)) {
+		SDL_SetGPUSwapchainParameters(app.voxelRenderer.getDevice(), app.window, SDL_GPU_SWAPCHAINCOMPOSITION_SDR,
+									  SDL_GPU_PRESENTMODE_IMMEDIATE);
+	}
 	IMGUI_CHECKVERSION();
 	ImGui::CreateContext();
 	ImGuiIO& io = ImGui::GetIO();
@@ -79,37 +83,48 @@ SDL_AppResult SDL_AppInit(void** appstate, int argc, char* argv[]) {
 	initInfo.MSAASamples = SDL_GPU_SAMPLECOUNT_1;
 	ImGui_ImplSDLGPU3_Init(&initInfo);
 
+	app.camera.move({ 0, 64, 0 });
+
 	// Build chunk
-	const float noise_scale = 0.03f;
+	const float noise_scale = 0.003f;
 	const float lacunarity = 2.0f;
 	const float gain = 0.5f;
 	const int octaves = 3;
 
 	const float seed_x = 1234.56f;
 	const float seed_z = 7890.12f;
+	const int max_height = 128;
 
-	int world_size = 10;
-	World world({ world_size, 1, world_size });
-	for (int z = 0; z < Chunking::CHUNK_SIZE * world_size; ++z) {
-		for (int x = 0; x < Chunking::CHUNK_SIZE * world_size; ++x) {
-			float nx = (static_cast<float>(x) + seed_x) * noise_scale;
-			float nz = (static_cast<float>(z) + seed_z) * noise_scale;
+	World world;
+	world.setRenderDist(4);
+	world.setChunkLoader([=](Vector3<int> chunkPos) {
+		constexpr int N = Chunking::CHUNK_SIZE;
+		auto chunk = new Chunking::Chunk();
+		if (chunkPos.y < 0) return chunk;  // nothing below the ground layer
 
-			float noise_val = stb_perlin_fbm_noise3(nx, nz, 0.0f, lacunarity, gain, octaves);
-			float height_percent = (noise_val + 1.0f) * 0.5f;
-			int max_terrain_height = static_cast<int>(height_percent * Chunking::CHUNK_SIZE);
+		for (int lz = 0; lz < N; ++lz) {
+			for (int lx = 0; lx < N; ++lx) {
+				int x = chunkPos.x * N + lx;
+				int z = chunkPos.z * N + lz;
 
-			for (int y = 0; y < Chunking::CHUNK_SIZE; ++y) {
-				uint32_t grey_intensity = static_cast<uint32_t>(y / static_cast<float>(Chunking::CHUNK_SIZE) * 255.0f);
-				uint32_t grey = (grey_intensity << 16) | (grey_intensity << 8) | grey_intensity;
+				float noise_val = stb_perlin_fbm_noise3((x + seed_x) * noise_scale, (z + seed_z) * noise_scale, 0.0f,
+														lacunarity, gain, octaves);
+				float height_percent = std::clamp((noise_val + 1.0f) * 0.5f, 0.0f, 1.0f);
+				int surfaceY = (int)(height_percent * max_height);	// computed once per column
 
-				if (y > max_terrain_height)
-					world.setVoxel({ x, y, z }, Chunking::NULL_VOXEL);
-				else
-					world.setVoxel({ x, y, z }, { grey });
+				for (int ly = 0; ly < N; ++ly) {
+					int wy = chunkPos.y * N + ly;
+					if (wy > surfaceY) break;  // everything above is air
+
+					uint32_t g = (uint32_t)(wy / (float)max_height * 255.0f);
+					chunk->setVoxel({ lx, ly, lz }, { 0xFF000000u | (g << 16) | (g << 8) | g });
+				}
 			}
 		}
-	}
+		chunk->compress();
+		return chunk;
+	});
+	world.buildWorld((app.camera.pos * Vector3f{ 1, 0, 1 }).cast<int>());
 	// Upload octree to gpu
 	app.voxelRenderer.submitOctree(world.buildOctree());
 
@@ -158,6 +173,7 @@ SDL_AppResult SDL_AppIterate(void* appstate) {
 
 	ImGui::Spacing();
 	ImGui::SliderFloat("Camera speed", &app.cameraSpeed, 1.0f, 100.0f);
+	ImGui::Text("Camera position: (%.2f, %.2f, %.2f)", app.camera.pos.x, app.camera.pos.y, app.camera.pos.z);
 
 	ImGui::End();
 

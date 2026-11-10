@@ -55,6 +55,7 @@ struct Vector3 {
 		result *= scalar;
 		return result;
 	}
+	Vector3 operator*(const Vector3& other) const { return { x * other.x, y * other.y, z * other.z }; }
 	Vector3 operator/(const T& scalar) const {
 		Vector3 result(*this);
 		result /= scalar;
@@ -63,6 +64,12 @@ struct Vector3 {
 
 	Vector3() : x(0), y(0), z(0) {}
 	Vector3(T x, T y, T z) : x(x), y(y), z(z) {}
+
+	template <typename newType>
+		requires std::integral<newType> || std::floating_point<newType>
+	Vector3<newType> cast() const {
+		return { static_cast<newType>(x), static_cast<newType>(y), static_cast<newType>(z) };
+	}
 };
 
 template <typename T>
