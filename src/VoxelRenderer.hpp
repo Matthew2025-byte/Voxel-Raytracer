@@ -99,15 +99,20 @@ class VoxelRenderer {
 		octreeInfo.usage = SDL_GPU_BUFFERUSAGE_COMPUTE_STORAGE_READ;
 		octreeInfo.size = sizeof(OctreeHandler::OctreeHeader) + array_size;	 // Add the size of the metadata
 		if (octreeBuffer == nullptr) octreeBuffer = SDL_CreateGPUBuffer(device, &octreeInfo);
-
-		// Create transfer buffer
-		SDL_GPUTransferBufferCreateInfo transferInfo = { .usage = SDL_GPU_TRANSFERBUFFERUSAGE_UPLOAD,
-														 .size =
-															 Uint32(sizeof(OctreeHandler::OctreeHeader) + array_size) };
-		SDL_GPUTransferBuffer* transferBuffer = SDL_CreateGPUTransferBuffer(device, &transferInfo);
-
+		if (octreeTransferBuffer == nullptr) {
+			// Create transfer buffer
+			SDL_GPUTransferBufferCreateInfo transferInfo = { .usage = SDL_GPU_TRANSFERBUFFERUSAGE_UPLOAD,
+															 .size = Uint32(sizeof(OctreeHandler::OctreeHeader) +
+																			array_size) };
+			octreeTransferBuffer = SDL_CreateGPUTransferBuffer(device, &transferInfo);
+			if (!octreeTransferBuffer) {
+				SDL_Log("An error occured creating the transfer buffer: %s", SDL_GetError());
+				return;
+			} else
+				SDL_Log("Created transfer buffer");
+		}
 		// Copy octree data to gpu buffer
-		void* map_ptr = SDL_MapGPUTransferBuffer(device, transferBuffer, false);
+		void* map_ptr = SDL_MapGPUTransferBuffer(device, octreeTransferBuffer, false);
 
 		if (map_ptr) {
 			uint8_t* byte_ptr = static_cast<uint8_t*>(map_ptr);
@@ -115,13 +120,13 @@ class VoxelRenderer {
 			SDL_memcpy(byte_ptr, &octree.header, sizeof(OctreeHandler::OctreeHeader));
 			SDL_memcpy(byte_ptr + sizeof(OctreeHandler::OctreeHeader), octree.nodes.data(), array_size);
 
-			SDL_UnmapGPUTransferBuffer(device, transferBuffer);
+			SDL_UnmapGPUTransferBuffer(device, octreeTransferBuffer);
 		}
 
 		// Submit transfer buffer via copy pass
 		SDL_GPUCommandBuffer* cmd_buffer = SDL_AcquireGPUCommandBuffer(device);
 		SDL_GPUCopyPass* copy_pass = SDL_BeginGPUCopyPass(cmd_buffer);
-		SDL_GPUTransferBufferLocation source = { .transfer_buffer = transferBuffer, .offset = 0 };
+		SDL_GPUTransferBufferLocation source = { .transfer_buffer = octreeTransferBuffer, .offset = 0 };
 		SDL_GPUBufferRegion dest = { .buffer = octreeBuffer,
 									 .offset = 0,
 									 .size = Uint32(sizeof(OctreeHandler::OctreeHeader) + array_size) };
@@ -132,7 +137,6 @@ class VoxelRenderer {
 		SDL_GPUFence* fence = SDL_SubmitGPUCommandBufferAndAcquireFence(cmd_buffer);
 		SDL_WaitForGPUFences(device, true, &fence, 1);
 		SDL_ReleaseGPUFence(device, fence);
-		SDL_ReleaseGPUTransferBuffer(device, transferBuffer);
 	}
 	std::tuple<void*, size_t> generateBytecodeFromHLSL(const char* computeShaderSource) {
 		size_t bytecodeSize = 0;
@@ -187,6 +191,7 @@ class VoxelRenderer {
 
 	void Shutdown() {
 		if (!device) return;
+		if (octreeTransferBuffer) SDL_ReleaseGPUTransferBuffer(device, octreeTransferBuffer);
 		if (octreeBuffer) SDL_ReleaseGPUBuffer(device, octreeBuffer);
 		if (computePipeline) SDL_ReleaseGPUComputePipeline(device, computePipeline);
 		if (renderTexture) SDL_ReleaseGPUTexture(device, renderTexture);
@@ -201,6 +206,7 @@ class VoxelRenderer {
    private:
 	SDL_GPUDevice* device;
 	SDL_GPUBuffer* octreeBuffer = nullptr;
+	SDL_GPUTransferBuffer* octreeTransferBuffer = nullptr;
 	SDL_GPUComputePipeline* computePipeline;
 	SDL_GPUTexture* renderTexture;
 

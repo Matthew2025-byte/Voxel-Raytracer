@@ -121,11 +121,14 @@ SDL_AppResult SDL_AppInit(void** appstate, int argc, char* argv[]) {
 				}
 			}
 		}
+		chunk->computeFaceMask();
 		chunk->compress();
 		return chunk;
 	});
-	world.buildWorld((app.camera.pos * Vector3f{ 1, 0, 1 }).cast<int>());
-	// Upload octree to gpu
+	Uint64 t0 = SDL_GetTicksNS();
+	world.update({ 0, 0, 0 }, std::numeric_limits<int>::max());
+	SDL_Log("World update time: %.3f ms", (SDL_GetTicksNS() - t0) / 1'000'000.0);
+	//  Upload octree to gpu
 	app.voxelRenderer.submitOctree(world.buildOctree());
 
 	/*

@@ -6,97 +6,9 @@
 #include <variant>
 #include <vector>
 
+#include "Chunking.hpp"
 #include "utils.hpp"
 
-namespace Chunking {
-constexpr int CHUNK_DEPTH = 5;
-constexpr int CHUNK_SIZE = 1 << CHUNK_DEPTH;
-struct Voxel {
-	uint32_t color;
-
-	bool operator==(const Voxel& other) const { return color == other.color; }
-};
-constexpr Voxel NULL_VOXEL = Voxel{ 0 };
-struct Chunk {
-	using RawData = std::array<Voxel, CHUNK_SIZE * CHUNK_SIZE * CHUNK_SIZE>;
-	struct Run {
-		uint32_t length;
-		Voxel voxel;
-	};
-	Chunk() = default;
-
-	size_t index(Vector3<int> pos) const {
-		SDL_assert(pos.x >= 0 && pos.x < CHUNK_SIZE);
-		SDL_assert(pos.y >= 0 && pos.y < CHUNK_SIZE);
-		SDL_assert(pos.z >= 0 && pos.z < CHUNK_SIZE);
-		return pos.x + pos.y * CHUNK_SIZE + pos.z * CHUNK_SIZE * CHUNK_SIZE;
-	}
-	const Voxel& getVoxel(Vector3<int> pos) const {
-		size_t i = index(pos);
-		if (auto* uniform = std::get_if<Voxel>(&data)) return *uniform;
-		if (auto* r = std::get_if<std::vector<Run>>(&data)) {
-			size_t end = 0;
-			for (const Run& run : *r) {
-				end += run.length;
-				if (i < end) return run.voxel;
-			}
-			return NULL_VOXEL;
-		}
-		return (**std::get_if<std::unique_ptr<RawData>>(&data))[i];
-	}
-	void setVoxel(Vector3<int> pos, Voxel v) {
-		size_t i = index(pos);
-		if (auto* u = std::get_if<Voxel>(&data); u && *u == v) return;
-		ensureRaw();
-		(*std::get<std::unique_ptr<RawData>>(data))[i] = v;
-
-		(**std::get_if<std::unique_ptr<RawData>>(&data))[i] = v;
-	}
-
-	const Voxel* isUniform() const { return std::get_if<Voxel>(&data); }
-
-	void ensureRaw() {
-		if (std::holds_alternative<std::unique_ptr<RawData>>(data)) return;
-		auto raw = std::make_unique<RawData>();
-		if (auto* uniform = std::get_if<Voxel>(&data))
-			raw->fill(*uniform);
-		else {
-			size_t k = 0;
-			for (const Run& run : *std::get_if<std::vector<Run>>(&data))
-				for (uint32_t j = 0; j < run.length; ++j) {
-					(*raw)[k++] = run.voxel;
-				}
-		}
-		data = std::move(raw);
-	}
-	void compress() {
-		auto* rawPtr = std::get_if<std::unique_ptr<RawData>>(&data);
-		if (!rawPtr) return;
-		const RawData& raw = **rawPtr;
-
-		std::vector<Run> runs;
-		for (const Voxel& v : raw) {
-			if (!runs.empty() && runs.back().voxel == v)
-				runs.back().length++;
-			else
-				runs.push_back({ 1, v });
-		}
-		if (runs.size() == 1)
-			data = runs[0].voxel;
-		else if (runs.size() * sizeof(Run) < sizeof(RawData) / 2)
-			data = std::move(runs);
-	}
-
-	size_t size() const {
-		if (auto* runs = std::get_if<std::vector<Run>>(&data)) return sizeof(Run) * runs->size();
-		if (std::holds_alternative<std::unique_ptr<RawData>>(data)) return sizeof(RawData);
-		return sizeof(Voxel);
-	}
-
-   private:
-	std::variant<Voxel, std::vector<Run>, std::unique_ptr<RawData>> data{ NULL_VOXEL };
-};
-}  // namespace Chunking
 namespace OctreeHandler {
 struct NodeData {
 	uint32_t child_pointer;
@@ -327,10 +239,19 @@ class World {
 		int maxLevels = 0;
 		while ((1 << maxLevels) < extent) maxLevels++;
 
+		Uint64 t0 = SDL_GetTicksNS();
 		std::vector<Level> levels(maxLevels + 1);
-
+		int solid = 0, hidden = 0;
 		for (auto& [p, c] : chunks) {
 			Node* n = nullptr;
+			// Calculate if chunk is hidden and skip
+			if (c.getFaceMask() == 0x3F) {
+				solid++;
+			}
+			if (computeHidden(p)) {
+				hidden++;
+				continue;
+			}
 			if (auto* v = c.isUniform()) {
 				if (*v == Chunking::NULL_VOXEL) continue;
 				n = new Node();
@@ -343,6 +264,9 @@ class World {
 
 			if (n) levels[maxLevels].emplace(p - minChunkPos, n);
 		}
+		Uint64 t1 = SDL_GetTicksNS();
+		SDL_Log("chunks %zu, solid faces %d, hidden %d, time %.3f ms", chunks.size(), solid, hidden,
+				(t1 - t0) / 1000000.0);
 
 		for (int level = maxLevels - 1; level >= 0; level--) {
 			for (const auto& [k, child] : levels[level + 1]) {
@@ -430,18 +354,32 @@ class World {
 		return octree;
 	}
 
-	void buildWorld(Vector3<int> cameraPos) {
-		if (!chunkLoader) return;
-		for (int cz = cameraPos.z - renderDist; cz <= cameraPos.z + renderDist; ++cz) {
-			for (int cx = cameraPos.x - renderDist; cx <= cameraPos.x + renderDist; ++cx) {
-				for (int cy = cameraPos.y - renderDist; cy <= cameraPos.y + renderDist; ++cy) {
-					Vector3<int> chunkPos = { cx, cy, cz };
-					if (chunks.contains(chunkPos)) continue;
-					Chunking::Chunk* chunk = chunkLoader(chunkPos);
-					if (chunk) chunks.emplace(chunkPos, std::move(*chunk));
-				}
-			}
+	bool update(Vector3<int> center, int maxLoads = 4) {
+		if (!chunkLoader) return true;
+
+		Vector3<int> cam = {
+			center.x >> Chunking::CHUNK_DEPTH,
+			center.y >> Chunking::CHUNK_DEPTH,
+			center.z >> Chunking::CHUNK_DEPTH,
+		};
+
+		if (!hasCamChunk || cam != lastCamChunk) {
+			lastCamChunk = cam;
+			hasCamChunk = true;
+			unloadFarChunks(cam);
+			queueMissingChunks(cam);
 		}
+
+		for (int i = 0; i < maxLoads && !loadQueue.empty(); ++i) {
+			Vector3<int> p = loadQueue.back();
+			loadQueue.pop_back();
+			if (chunks.contains(p)) continue;
+
+			auto loaded = chunkLoader(p);
+			chunks.emplace(p, loaded ? std::move(*loaded) : Chunking::Chunk{});
+			if (loaded) octreeDirty = true;
+		}
+		return loadQueue.empty();
 	}
 	void setChunkLoader(std::function<Chunking::Chunk*(Vector3<int>)> loader) { chunkLoader = std::move(loader); }
 
@@ -452,6 +390,11 @@ class World {
 	std::unordered_map<Vector3<int>, Chunking::Chunk> chunks;
 	std::function<Chunking::Chunk*(Vector3<int>)> chunkLoader;
 
+	Vector3<int> lastCamChunk{ 0, 0, 0 };
+	bool hasCamChunk = false;
+	bool octreeDirty = false;
+	std::vector<Vector3<int>> loadQueue;
+
 	static std::tuple<Vector3<int>, Vector3<int>> split(Vector3<int> pos) {
 		Vector3<int> chunkPos = { pos.x >> Chunking::CHUNK_DEPTH, pos.y >> Chunking::CHUNK_DEPTH,
 								  pos.z >> Chunking::CHUNK_DEPTH };
@@ -460,22 +403,46 @@ class World {
 
 		return { chunkPos, localPos };
 	}
-	uint64_t morton(Vector3<uint32_t> pos) {
-		uint64_t code = 0;
-		for (int i = 0; i < 21; i++) {
-			code |= (uint64_t)((pos.x >> i) & 1) << (3 * i + 0);
-			code |= (uint64_t)((pos.y >> i) & 1) << (3 * i + 1);
-			code |= (uint64_t)((pos.z >> i) & 1) << (3 * i + 2);
+	static inline Vector3<int> DIRS[6] = { { 1, 0, 0 },	 { -1, 0, 0 }, { 0, 1, 0 },
+										   { 0, -1, 0 }, { 0, 0, 1 },  { 0, 0, -1 } };
+	bool computeHidden(Vector3<int> p) const {
+		uint8_t covered = 0;
+		for (int d = 0; d < 6; ++d) {
+			Vector3<int> n = p + DIRS[d];
+			if (n.y < 0) {
+				covered |= 1 << d;
+				continue;
+			}
+			auto it = chunks.find(n);
+			if (it == chunks.end() || (it->second.getFaceMask() & (1 << (d ^ 1)))) {
+				covered |= 1 << d;
+			}
 		}
-		return code;
+		return covered == 0x3F;
 	}
-	Vector3<uint32_t> decode(uint64_t code) {
-		Vector3<uint32_t> pos = { 0, 0, 0 };
-		for (int i = 0; i < 21; i++) {
-			pos.x |= (uint32_t)((code >> (3 * i + 0)) & 1) << i;
-			pos.y |= (uint32_t)((code >> (3 * i + 1)) & 1) << i;
-			pos.z |= (uint32_t)((code >> (3 * i + 2)) & 1) << i;
+
+	void queueMissingChunks(Vector3<int> cam) {
+		loadQueue.clear();
+		for (int z = -renderDist; z <= renderDist; ++z) {
+			for (int y = -renderDist; y <= renderDist; ++y) {
+				for (int x = -renderDist; x <= renderDist; ++x) {
+					Vector3<int> p = cam + Vector3<int>{ x, y, z };
+					if (!chunks.contains(p)) loadQueue.push_back(p);
+				}
+			}
 		}
-		return pos;
+		std::sort(loadQueue.begin(), loadQueue.end(),
+				  [&](const auto& a, const auto& b) { return (a - cam).sqrMagnitude() > (b - cam).sqrMagnitude(); });
+	}
+	void unloadFarChunks(Vector3<int> cam) {
+		int u2 = (renderDist + 2) * (renderDist + 2);
+		for (auto it = chunks.begin(); it != chunks.end();) {
+			if ((it->first - cam).sqrMagnitude() > u2) {
+				auto* u = it->second.isUniform();
+				if (!(u && *u == Chunking::NULL_VOXEL)) octreeDirty = true;
+				it = chunks.erase(it);
+			} else
+				++it;
+		}
 	}
 };
