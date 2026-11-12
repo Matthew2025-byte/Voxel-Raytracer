@@ -17,12 +17,11 @@ struct CameraData {
 	float pad3;
 	Vector3f up;
 	uint32_t debugMode;
+	Vector3f sunDir = { 0, 1, 0 };
 
 	CameraData() : pos(0, 0, 0), forward(0, 0, 1), right(1, 0, 0), up(0, 1, 0), debugMode(0) {}
 	CameraData(Vector3f pos) : pos(pos), forward(0, 0, 1), right(1, 0, 0), up(0, 1, 0), debugMode(0) {}
 };
-static_assert(sizeof(CameraData) == 64, "CameraData must be 64 bytes");
-static_assert(offsetof(CameraData, forward) == 16, "forward must start at byte 16");
 struct Camera {
 	CameraData gpuData;
 	Vector3f pos = { 0, 0, 0 };

@@ -178,6 +178,9 @@ SDL_AppResult SDL_AppIterate(void* appstate) {
 	ImGui::SliderFloat("Camera speed", &app.cameraSpeed, 1.0f, 100.0f);
 	ImGui::Text("Camera position: (%.2f, %.2f, %.2f)", app.camera.pos.x, app.camera.pos.y, app.camera.pos.z);
 
+	ImGui::Text("World");
+	ImGui::DragFloat3("Sun Direction", &app.camera.gpuData.sunDir.x, 0.01f);
+
 	ImGui::End();
 
 	if (!app.pause) {

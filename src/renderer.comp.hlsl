@@ -6,6 +6,7 @@ cbuffer CameraBuffer : register(b0, space2) {
     float3 cameraRight;
     float3 cameraUp;
     uint debugMode;
+    float3 sunDir;
 }
 ByteAddressBuffer octreeBuffer : register(t0, space0);
 
@@ -68,10 +69,20 @@ bool intersectAABB(float3 ro, float3 invDir, float3 bmin, float3 bmax, out float
     return tEnter <= tExit && tExit >= 0.0;
 }
     
+struct RayHit {
+    bool hit;
+    float hitT;
+    float3 position;
+    float3 color;
+    float3 normal;
 
-float3 castRay(Header header, float3 ro, float3 rd, out float hitT, out uint iterations) {
-    hitT = 1e30;
-    iterations = 0;
+    uint iterations;
+};
+RayHit castRay(Header header, float3 ro, float3 rd) {
+    RayHit result;
+    result.hit = false;
+    result.hitT = 1e30;
+    result.iterations = 0;
 
     float3 safeRD = rd + float3(abs(rd) < 1e-8) * 1e-8;
     float3 invDir = 1 / safeRD;
@@ -82,7 +93,7 @@ float3 castRay(Header header, float3 ro, float3 rd, out float hitT, out uint ite
 
     float tr0, tr1;
     if (!intersectAABB(ro, invDir, rootCenter - rootHalf, rootCenter + rootHalf, tr0, tr1))
-        return float3(0, 0, 0);
+        return result;
 
     uint stackNode[STACK_SIZE];
     float3 stackCenter[STACK_SIZE];
@@ -105,7 +116,7 @@ float3 castRay(Header header, float3 ro, float3 rd, out float hitT, out uint ite
             center = stackCenter[sp];
             i = stackI[sp];
             halfLen *= 2.0;
-            iterations++;
+            result.iterations++;
             continue;
         }
         
@@ -123,8 +134,11 @@ float3 castRay(Header header, float3 ro, float3 rd, out float hitT, out uint ite
         uint next = childIndex(node, oct);
 
         if ((node.getLeafMask() >> oct) & 1u) {
-            hitT = max(t0, 0.0);
-            return unpackVoxelColor(loadVoxel(next).color);
+            result.hit = true;
+            result.hitT = max(t0, 0.0);
+            result.position = ro + rd * result.hitT;
+            result.color = unpackVoxelColor(loadVoxel(next).color);
+            return result;
         }
 
         if (sp < STACK_SIZE) {
@@ -137,11 +151,11 @@ float3 castRay(Header header, float3 ro, float3 rd, out float hitT, out uint ite
             center = cc;
             halfLen = childHalf;
             i = 0;
-            iterations++;
+            result.iterations++;
         }
     }
     
-    return float3(0, 0, 0);
+    return result;
 }
 
 [numthreads(16, 16, 1)]
@@ -176,12 +190,10 @@ void main(uint3 dispatchThreadID : SV_DispatchThreadID)
 
     float3 rayDir = normalize(screenX * cameraRight + screenY * cameraUp + cameraForward);
     // Pixel color
-    float t;
-    uint iterations;
-    //float4 pixelColor = float4(castRay(header, cameraPos, rayDir, t), 1);
-    float3 color = castRay(header, cameraPos, rayDir, t, iterations);
+    RayHit hit = castRay(header, cameraPos, rayDir);
+    float3 color = hit.color;
     if (debugMode == 1) {
-        color = heatmap(iterations/ 64.0);
+        color = heatmap(hit.iterations / 64.0);
     }
 
     float4 pixelColor = float4(color, 1.0);
