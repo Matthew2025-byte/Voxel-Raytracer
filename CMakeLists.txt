@@ -10,6 +10,7 @@ find_package(stb REQUIRED)
 find_package(imgui REQUIRED)
 find_package(SDL3 CONFIG REQUIRED)
 find_package(SDL3_shadercross CONFIG QUIET)
+find_package(libmorton CONFIG REQUIRED)
 
 if (SDL3_shadercross_FOUND)
     set(SHADERCROSS_TARGET SDL3_shadercross::SDL3_shadercross)
@@ -28,4 +29,4 @@ endif()
 
 add_executable(VoxelRaytracer src/main.cpp)
 
-target_link_libraries(VoxelRaytracer TIFF::TIFF ${stb_INCLUDE_DIR} imgui::imgui SDL3::SDL3 ${SHADERCROSS_TARGET})
+target_link_libraries(VoxelRaytracer TIFF::TIFF ${stb_INCLUDE_DIR} imgui::imgui SDL3::SDL3 ${SHADERCROSS_TARGET} libmorton::libmorton)

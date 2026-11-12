@@ -7,81 +7,8 @@
 #include <vector>
 
 #include "Chunking.hpp"
+#include "Octree.hpp"
 #include "utils.hpp"
-
-namespace OctreeHandler {
-struct NodeData {
-	uint32_t child_pointer;
-	uint32_t masks;
-};
-struct VoxelData {
-	uint32_t color;
-	uint32_t padding;
-};
-
-union Node {
-	NodeData node;
-	VoxelData voxel;
-	Node() : node{ 0, 0 } {}
-
-	static Node makeNode(uint32_t child, uint8_t childMask, uint8_t leafMask) {
-		Node n;
-		n.node.child_pointer = child;
-		n.node.masks = (uint32_t(childMask) << 8) | leafMask;
-		return n;
-	}
-	static Node makeVoxel(uint32_t color) {
-		Node n;
-		n.voxel = { color, 0 };
-		return n;
-	}
-};
-static_assert(sizeof(Node) == 8, "Node must be 64 bits");
-struct OctreeHeader {
-	Vector3<int> center;
-	int half_len;
-
-	uint32_t root_node;
-	uint32_t padding[3];
-
-	OctreeHeader() : center{ 0, 0, 0 }, half_len(2), root_node(0), padding{ 0, 0, 0 } {}
-};
-struct Octree {
-	OctreeHeader header;
-	std::vector<Node> nodes;
-
-	void buildTestTree() {
-		nodes.clear();
-		header.root_node = 0;
-
-		// [0]      root: all 8 octants exist, none are leaves
-		// [1..8]   one internal node per octant (octant o lives at 1 + o)
-		// [9..64]  voxels, 7 per octant (the 8th, the outer corner, is removed)
-		nodes.push_back(Node::makeNode(1, 0xFF, 0x00));
-
-		for (uint32_t o = 0; o < 8; o++) {
-			// The outer corner of octant o is the child whose bits equal o's bits.
-			uint8_t mask = 0xFF & ~(1u << o);
-			nodes.push_back(Node::makeNode(9 + o * 7, mask, mask));
-		}
-
-		for (uint32_t o = 0; o < 8; o++) {
-			for (uint32_t c = 0; c < 8; c++) {
-				if (c == o) continue;  // skip the outer corner
-
-				// Voxel coords in the 4x4x4 grid, same bit convention as the shader
-				uint32_t x = (o & 1) * 2 + (c & 1);
-				uint32_t y = ((o >> 1) & 1) * 2 + ((c >> 1) & 1);
-				uint32_t z = ((o >> 2) & 1) * 2 + ((c >> 2) & 1);
-
-				uint32_t color = 0xFF000000u | ((z * 85) << 16) | ((y * 85) << 8) | (x * 85);
-				nodes.push_back(Node::makeVoxel(color));
-			}
-		}
-		// nodes.size() == 65
-	}
-};
-}  // namespace OctreeHandler
 
 class World {
    public:
@@ -107,63 +34,9 @@ class World {
 		it->second.setVoxel(localPos, v);
 	}
 
-	struct V {
-		uint32_t color = Chunking::NULL_VOXEL.color;
-
-		bool operator==(const V&) const = default;
-	};
-	struct Node {
-		bool isLeaf = false;
-		union {
-			Node* children[8];
-			V voxel;
-		};
-		Node() {
-			for (auto& c : children) c = nullptr;
-		}
-		Node(const Node&) = delete;
-		Node& operator=(const Node&) = delete;
-		bool compress() {
-			if (isLeaf) return voxel.color == Chunking::NULL_VOXEL.color;
-			// Run recursive compression on children
-			// if child is a leaf, log type
-			bool hasChild = false, allLeaves = true, allPresent = true;
-			for (auto& c : children) {
-				if (!c) {
-					allPresent = false;
-					continue;
-				}
-				if (c->compress()) {
-					delete c;
-					c = nullptr;
-					allPresent = false;
-					continue;
-				}
-				hasChild = true;
-				if (!c->isLeaf) allLeaves = false;
-			}
-			if (!hasChild) return true;
-			if (allPresent && allLeaves) {
-				V refVox = children[0]->voxel;
-				for (int i = 1; i < 8; i++)
-					if (children[i]->voxel != refVox) return false;
-				for (auto child : children) delete child;
-				voxel = refVox;
-				isLeaf = true;
-				return false;
-			}
-			return false;
-		}
-
-		~Node() {
-			if (isLeaf) return;
-			for (Node* child : children) delete child;
-		}
-	};
-
-	std::unique_ptr<Node> buildChunk(Chunking::Chunk& chunk) {
+	std::unique_ptr<OctreeBuilder::Node> buildChunk(Chunking::Chunk& chunk) {
 		constexpr int chunkSize = Chunking::CHUNK_SIZE;
-		using Level = std::vector<Node*>;
+		using Level = std::vector<OctreeBuilder::Node*>;
 		std::vector<Level> levels(Chunking::CHUNK_DEPTH + 1);
 
 		// Build leaf nodes
@@ -174,7 +47,7 @@ class World {
 					Chunking::Voxel voxel = chunk.getVoxel(Vector3<int>(x, y, z));
 					if (voxel == Chunking::NULL_VOXEL) continue;
 
-					auto node = new Node();
+					auto node = new OctreeBuilder::Node();
 					node->isLeaf = true;
 					node->voxel.color = voxel.color;
 					levels[Chunking::CHUNK_DEPTH][x + y * chunkSize + z * chunkSize * chunkSize] = node;
@@ -193,7 +66,7 @@ class World {
 			for (int z = 0; z < currentSize; ++z) {
 				for (int y = 0; y < currentSize; ++y) {
 					for (int x = 0; x < currentSize; ++x) {
-						auto node = new Node();
+						auto node = new OctreeBuilder::Node();
 						bool hasChildren = false;
 						for (int oct = 0; oct < 8; oct++) {
 							int cx = (x * 2) + (oct & 1);
@@ -217,12 +90,12 @@ class World {
 			currentLevel--;
 		}
 		if (levels[0][0] == nullptr) return nullptr;
-		auto root = std::unique_ptr<Node>(levels[0][0]);
+		auto root = std::unique_ptr<OctreeBuilder::Node>(levels[0][0]);
 		if (root->compress()) return nullptr;
 		return root;
 	}
-	std::unique_ptr<Node> buildTree(Vector3<int>& outMin, int& outMaxLevels) {
-		using Level = std::unordered_map<Vector3<int>, Node*>;
+	std::unique_ptr<OctreeBuilder::Node> buildTree(Vector3<int>& outMin, int& outMaxLevels) {
+		using Level = std::unordered_map<Vector3<int>, OctreeBuilder::Node*>;
 
 		Vector3<int> minChunkPos = chunks.begin()->first;
 		Vector3<int> maxChunkPos = minChunkPos;
@@ -243,7 +116,7 @@ class World {
 		std::vector<Level> levels(maxLevels + 1);
 		int solid = 0, hidden = 0;
 		for (auto& [p, c] : chunks) {
-			Node* n = nullptr;
+			OctreeBuilder::Node* n = nullptr;
 			// Calculate if chunk is hidden and skip
 			if (c.getFaceMask() == 0x3F) {
 				solid++;
@@ -254,7 +127,7 @@ class World {
 			}
 			if (auto* v = c.isUniform()) {
 				if (*v == Chunking::NULL_VOXEL) continue;
-				n = new Node();
+				n = new OctreeBuilder::Node();
 				n->isLeaf = true;
 				n->voxel.color = v->color;
 			} else {
@@ -274,7 +147,7 @@ class World {
 				uint32_t oct = (k.x & 1) | ((k.y & 1) << 1) | ((k.z & 1) << 2);
 
 				auto [it, inserted] = levels[level].try_emplace(pk, nullptr);
-				if (inserted) it->second = new Node();
+				if (inserted) it->second = new OctreeBuilder::Node();
 				it->second->children[oct] = child;
 			}
 		}
@@ -284,7 +157,7 @@ class World {
 
 		auto it = levels[0].find({ 0, 0, 0 });
 		if (it == levels[0].end()) return nullptr;
-		auto root = std::unique_ptr<Node>(it->second);
+		auto root = std::unique_ptr<OctreeBuilder::Node>(it->second);
 		if (root->compress()) return nullptr;
 		return root;
 	}
@@ -295,13 +168,13 @@ class World {
 	 * @param root The root node to build the octree node from.
 	 * @return OctreeHandler::Octree
 	 */
-	OctreeHandler::Octree flatten(std::unique_ptr<Node> root) {
+	OctreeHandler::Octree flatten(std::unique_ptr<OctreeBuilder::Node> root) {
 		using gpuNode = OctreeHandler::Node;
 		OctreeHandler::Octree octree;
 		if (!root || root->isLeaf) return octree;
 
 		auto& nodes = octree.nodes;
-		std::vector<std::pair<const Node*, uint32_t>> queue;
+		std::vector<std::pair<const OctreeBuilder::Node*, uint32_t>> queue;
 
 		nodes.push_back(gpuNode::makeNode(0, 0, 0));
 		queue.emplace_back(root.get(), 0u);
@@ -313,7 +186,7 @@ class World {
 			uint8_t childMask = 0, leafMask = 0;
 
 			for (int oct = 0; oct < 8; ++oct) {
-				const Node* child = node->children[oct];
+				const OctreeBuilder::Node* child = node->children[oct];
 				if (!child) continue;
 
 				childMask |= 1u << oct;

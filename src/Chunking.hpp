@@ -1,21 +1,25 @@
 #include <SDL3/SDL.h>
+#include <libmorton/morton.h>
 
 #include <array>
 #include <memory>
 #include <variant>
 #include <vector>
 
+#include "Octree.hpp"
 #include "utils.hpp"
 
 namespace Chunking {
 constexpr int CHUNK_DEPTH = 5;
 constexpr int CHUNK_SIZE = 1 << CHUNK_DEPTH;
+
 struct Voxel {
 	uint32_t color;
 
 	bool operator==(const Voxel& other) const { return color == other.color; }
 };
 constexpr Voxel NULL_VOXEL = Voxel{ 0 };
+
 struct Chunk {
 	using RawData = std::array<Voxel, CHUNK_SIZE * CHUNK_SIZE * CHUNK_SIZE>;
 	struct Run {
@@ -119,10 +123,81 @@ struct Chunk {
 		return sizeof(Voxel);
 	}
 
+	std::vector<OctreeHandler::Node> buildChunk() const {
+		if (auto* u = isUniform()) {
+			return { OctreeHandler::Node::makeVoxel(u->color) };
+		}
+		if (auto* raw = std::get_if<std::unique_ptr<RawData>>(&data)) {
+			std::vector<std::pair<uint32_t, Voxel>> voxels;
+			voxels.reserve(CHUNK_SIZE * CHUNK_SIZE * CHUNK_SIZE);
+
+			for (uint32_t m = 0; m < CHUNK_SIZE * CHUNK_SIZE * CHUNK_SIZE; ++m) {
+				uint_fast16_t x, y, z;
+				libmorton::morton3D_32_decode(m, x, y, z);
+
+				uint32_t index = x + y * CHUNK_SIZE + z * CHUNK_SIZE * CHUNK_SIZE;
+				Voxel v = (**raw)[index];
+				if (v == NULL_VOXEL) continue;
+				voxels.emplace_back(m, v);
+			}
+
+			struct Entry {
+				uint32_t code;
+				uint32_t firstChild;
+				uint32_t color;
+				uint8_t childMask = 0;
+				uint8_t leafMask = 0;
+				bool isLeaf = false;
+			};
+
+			std::vector<std::vector<Entry>> levels(CHUNK_DEPTH + 1);
+			levels[0].reserve(voxels.size());
+			for (auto& [code, voxel] : voxels) levels[0].push_back({ code, 0, voxel.color, 0, 0, true });
+
+			for (uint32_t depth = 0; depth < CHUNK_DEPTH; ++depth) {
+				const auto& below = levels[depth];
+				auto& above = levels[depth + 1];
+				above.reserve(below.size());
+
+				for (uint32_t i = 0; i < below.size();) {
+					Entry p{};
+					p.code = below[i].code >> 3;
+					p.firstChild = i;
+					while (i < below.size() && (below[i].code >> 3) == p.code) {
+						uint8_t bit = 1u << (below[i].code & 7);
+						p.childMask |= bit;
+						if (below[i].isLeaf) p.leafMask |= bit;
+						++i;
+					}
+					above.push_back(p);
+				}
+			}
+
+			std::vector<uint32_t> base(CHUNK_DEPTH + 1);
+			uint32_t total = 0;
+			for (int d = CHUNK_DEPTH; d >= 0; --d) {
+				base[d] = total;
+				total += levels[d].size();
+			}
+
+			std::vector<OctreeHandler::Node> nodes;
+			nodes.reserve(total);
+			for (int d = CHUNK_DEPTH; d >= 0; --d) {
+				for (const Entry& e : levels[d]) {
+					nodes.push_back(
+						e.isLeaf ? OctreeHandler::Node::makeVoxel(e.color)
+								 : OctreeHandler::Node::makeNode(base[d - 1] + e.firstChild, e.childMask, e.leafMask));
+				}
+			}
+			return nodes;
+		} else {
+			SDL_assert(false && "RLE encoding in a build chunk operation is not capable of run time performance");
+		}
+	}
+
    private:
 	std::variant<Voxel, std::vector<Run>, std::unique_ptr<RawData>> data{ NULL_VOXEL };
-	uint8_t faceMask;
-	bool dirty, hidden;
+	uint8_t faceMask = 0;
+	bool dirty = false, hidden = false;
 };
-
 }  // namespace Chunking
