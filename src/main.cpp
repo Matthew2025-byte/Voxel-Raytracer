@@ -100,7 +100,7 @@ SDL_AppResult SDL_AppInit(void** appstate, int argc, char* argv[]) {
 	world.setChunkLoader([=](Vector3<int> chunkPos) {
 		constexpr int N = Chunking::CHUNK_SIZE;
 		auto chunk = new Chunking::Chunk();
-		if (chunkPos.y < 0) return chunk;  // nothing below the ground layer
+		if (chunkPos.y < 0 || chunkPos.y >= max_height / N) return chunk;  // nothing below the ground layer
 
 		for (int lz = 0; lz < N; ++lz) {
 			for (int lx = 0; lx < N; ++lx) {
@@ -127,9 +127,12 @@ SDL_AppResult SDL_AppInit(void** appstate, int argc, char* argv[]) {
 	});
 	Uint64 t0 = SDL_GetTicksNS();
 	world.update({ 0, 0, 0 }, std::numeric_limits<int>::max());
-	SDL_Log("World update time: %.3f ms", (SDL_GetTicksNS() - t0) / 1'000'000.0);
+	Uint64 t1 = SDL_GetTicksNS();
+	SDL_Log("World update time: %f ms", (t1 - t0) / 1'000'000.0);
 	//  Upload octree to gpu
 	app.voxelRenderer.submitOctree(world.buildOctree());
+	Uint64 t2 = SDL_GetTicksNS();
+	SDL_Log("Octree build time: %f ms", (t2 - t1) / 1'000'000.0);
 
 	/*
 	 * ============ DEBUG MODE ============

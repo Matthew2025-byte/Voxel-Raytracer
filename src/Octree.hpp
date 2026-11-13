@@ -8,6 +8,8 @@ namespace OctreeHandler {
 struct NodeData {
 	uint32_t child_pointer;
 	uint32_t masks;
+
+	std::tuple<uint8_t, uint8_t> getMasks() const { return { (uint8_t)(masks >> 8), (uint8_t)(masks & 0xFF) }; }
 };
 struct VoxelData {
 	uint32_t color;

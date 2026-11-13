@@ -123,7 +123,7 @@ struct Chunk {
 		return sizeof(Voxel);
 	}
 
-	std::vector<OctreeHandler::Node> buildChunk() const {
+	std::vector<OctreeHandler::Node> buildChunk(uint32_t shift) const {
 		if (auto* u = isUniform()) {
 			return { OctreeHandler::Node::makeVoxel(u->color) };
 		}
@@ -184,9 +184,9 @@ struct Chunk {
 			nodes.reserve(total);
 			for (int d = CHUNK_DEPTH; d >= 0; --d) {
 				for (const Entry& e : levels[d]) {
-					nodes.push_back(
-						e.isLeaf ? OctreeHandler::Node::makeVoxel(e.color)
-								 : OctreeHandler::Node::makeNode(base[d - 1] + e.firstChild, e.childMask, e.leafMask));
+					nodes.push_back(e.isLeaf ? OctreeHandler::Node::makeVoxel(e.color)
+											 : OctreeHandler::Node::makeNode(shift + base[d - 1] + e.firstChild,
+																			 e.childMask, e.leafMask));
 				}
 			}
 			return nodes;
